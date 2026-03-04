@@ -17,6 +17,46 @@ const NODE_TYPE = {
 };
 
 const MAX_LIST_LEVEL = 4;
+
+// Emoji 正则：匹配常见 Emoji 字符（包括组合 Emoji）
+const EMOJI_REGEX = /(\p{Emoji_Presentation}|\p{Extended_Pictographic}(?:\u{FE0F}|\u{200D}\p{Extended_Pictographic})*)/gu;
+
+/**
+ * 将文本拆分为普通文本和 Emoji 片段，对 Emoji 使用 Segoe UI Emoji 字体
+ * @param {string} text - 原始文本
+ * @param {object} baseStyle - 基础样式
+ * @returns {TextRun[]} TextRun 数组
+ */
+function createTextRunsWithEmoji(text, baseStyle = {}) {
+  if (!EMOJI_REGEX.test(text)) {
+    return [Object.keys(baseStyle).length > 0 ? new TextRun({ text, ...baseStyle }) : new TextRun(text)];
+  }
+  // 重置 lastIndex
+  EMOJI_REGEX.lastIndex = 0;
+
+  const runs = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = EMOJI_REGEX.exec(text)) !== null) {
+    // 添加 Emoji 前的普通文本
+    if (match.index > lastIndex) {
+      const before = text.slice(lastIndex, match.index);
+      runs.push(Object.keys(baseStyle).length > 0 ? new TextRun({ text: before, ...baseStyle }) : new TextRun(before));
+    }
+    // 添加 Emoji（使用 Segoe UI Emoji 字体）
+    runs.push(new TextRun({ text: match[0], font: "Segoe UI Emoji", ...baseStyle }));
+    lastIndex = match.index + match[0].length;
+  }
+
+  // 添加剩余的普通文本
+  if (lastIndex < text.length) {
+    const remaining = text.slice(lastIndex);
+    runs.push(Object.keys(baseStyle).length > 0 ? new TextRun({ text: remaining, ...baseStyle }) : new TextRun(remaining));
+  }
+
+  return runs;
+}
 const MAX_IMAGE_WIDTH_PX = 560;
 
 // Markdown 文件所在目录，用于解析相对路径图片
@@ -94,19 +134,19 @@ function convertNode(node) {
     switch (tagName) {
       case 'H1':
         return new Paragraph({
-          text: node.textContent,
+          children: createTextRunsWithEmoji(node.textContent),
           style: "Heading1"
         });
 
       case 'H2':
         return new Paragraph({
-          text: node.textContent,
+          children: createTextRunsWithEmoji(node.textContent),
           style: "Heading2"
         });
 
       case 'H3':
         return new Paragraph({
-          text: node.textContent,
+          children: createTextRunsWithEmoji(node.textContent),
           style: "Heading3"
         });
 
@@ -114,7 +154,7 @@ function convertNode(node) {
       case 'H5':
       case 'H6':
         return new Paragraph({
-          text: node.textContent,
+          children: createTextRunsWithEmoji(node.textContent),
           style: "Heading3"
         });
 
@@ -494,22 +534,7 @@ function convertTable(tableElement) {
     headerRows.forEach(tr => {
       const cells = [];
       tr.querySelectorAll('th, td').forEach(cell => {
-        const cellContent = convertCellContent(cell);
-
-        // 表头加粗
-        const headerCellContent = cellContent.map(item => {
-          if (item.constructor.name === 'Paragraph') {
-            const children = item.options?.children || [];
-            const boldChildren = children.map(child => {
-              if (child.constructor.name === 'TextRun') {
-                return new TextRun({ ...child.options, bold: true, size: 24 });
-              }
-              return child;
-            });
-            return new Paragraph({ ...item.options, children: boldChildren, alignment: AlignmentType.CENTER });
-          }
-          return item;
-        });
+        const headerCellContent = convertCellContent(cell, true);
 
         cells.push(new TableCell({
           children: headerCellContent,
@@ -563,11 +588,11 @@ function convertTable(tableElement) {
 /**
  * 转换表格单元格内容
  */
-function convertCellContent(cellElement) {
-  const runs = convertInlineNodes(cellElement.childNodes);
+function convertCellContent(cellElement, isHeader = false) {
+  const runs = convertInlineNodes(cellElement.childNodes, false, isHeader);
   return [new Paragraph({
     children: runs.length > 0 ? runs : [new TextRun('')],
-    alignment: cellElement.nodeName === 'TH' ? AlignmentType.CENTER : AlignmentType.LEFT
+    alignment: (isHeader || cellElement.nodeName === 'TH') ? AlignmentType.CENTER : AlignmentType.LEFT
   })];
 }
 
@@ -620,14 +645,14 @@ function convertChildren(containerElement) {
  * @param {NodeList} nodes - 节点列表
  * @param {boolean} skipNestedLists - 是否跳过嵌套列表
  */
-function convertInlineNodes(nodes, skipNestedLists = false) {
+function convertInlineNodes(nodes, skipNestedLists = false, applyBold = false) {
   const runs = [];
 
   for (const node of nodes) {
     if (node.nodeType === NODE_TYPE.TEXT_NODE) {
       const text = node.textContent;
       if (text && text.trim()) {
-        runs.push(new TextRun(text));
+        runs.push(...createTextRunsWithEmoji(text, applyBold ? { bold: true, size: 24 } : {}));
       }
     } else if (node.nodeType === NODE_TYPE.ELEMENT_NODE) {
       const tagName = node.nodeName.toUpperCase();
@@ -640,17 +665,17 @@ function convertInlineNodes(nodes, skipNestedLists = false) {
       switch (tagName) {
         case 'STRONG':
         case 'B':
-          runs.push(new TextRun({ text: node.textContent, bold: true }));
+          runs.push(...createTextRunsWithEmoji(node.textContent, { bold: true, ...(applyBold ? { size: 24 } : {}) }));
           break;
 
         case 'EM':
         case 'I':
-          runs.push(new TextRun({ text: node.textContent, italics: true }));
+          runs.push(...createTextRunsWithEmoji(node.textContent, { italics: true, ...(applyBold ? { bold: true, size: 24 } : {}) }));
           break;
 
         case 'DEL':
         case 'S':
-          runs.push(new TextRun({ text: node.textContent, strike: true }));
+          runs.push(...createTextRunsWithEmoji(node.textContent, { strike: true, ...(applyBold ? { bold: true, size: 24 } : {}) }));
           break;
 
         case 'CODE':
@@ -658,16 +683,13 @@ function convertInlineNodes(nodes, skipNestedLists = false) {
             text: node.textContent,
             font: "Consolas",
             size: 22,
-            color: "DC2626"
+            color: "DC2626",
+            ...(applyBold ? { bold: true } : {})
           }));
           break;
 
         case 'A':
-          runs.push(new TextRun({
-            text: node.textContent,
-            color: "2563EB",
-            underline: {}
-          }));
+          runs.push(...createTextRunsWithEmoji(node.textContent, { color: "2563EB", underline: {}, ...(applyBold ? { bold: true, size: 24 } : {}) }));
           break;
 
         case 'BR':
@@ -688,7 +710,7 @@ function convertInlineNodes(nodes, skipNestedLists = false) {
         }
 
         default:
-          runs.push(...convertInlineNodes(node.childNodes, skipNestedLists));
+          runs.push(...convertInlineNodes(node.childNodes, skipNestedLists, applyBold));
       }
     }
   }
