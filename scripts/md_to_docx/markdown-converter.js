@@ -544,7 +544,7 @@ function processParagraphs(html) {
   const result = [];
   let inPreBlock = false;
 
-  const blockElements = ['<h1', '<h2', '<h3', '<h4', '<h5', '<h6', '<ul', '<ol', '<li', '<table', '<thead', '<tbody', '<tr', '<th', '<td', '<blockquote', '<hr', '<div', '</li', '</ul', '</ol', '</table', '</thead', '</tbody', '</tr', '</blockquote', '</div'];
+  const blockElements = ['<h1', '<h2', '<h3', '<h4', '<h5', '<h6', '<ul', '<ol', '<li', '<table', '<thead', '<tbody', '<tr', '<th', '<td', '<blockquote', '<hr', '<div', '<img', '</li', '</ul', '</ol', '</table', '</thead', '</tbody', '</tr', '</blockquote', '</div'];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];

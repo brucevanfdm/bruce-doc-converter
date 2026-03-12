@@ -680,7 +680,8 @@ function convertCellContent(cellElement, isHeader = false) {
   });
   return [new Paragraph({
     children: runs.length > 0 ? runs : [new TextRun('')],
-    alignment: (isHeader || cellElement.nodeName === 'TH') ? AlignmentType.CENTER : AlignmentType.LEFT
+    alignment: (isHeader || cellElement.nodeName === 'TH') ? AlignmentType.CENTER : AlignmentType.LEFT,
+    indent: { firstLine: 0 }
   })];
 }
 
