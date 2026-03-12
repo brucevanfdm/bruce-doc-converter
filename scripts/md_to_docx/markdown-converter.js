@@ -542,7 +542,6 @@ function splitMarkdownTableRow(line) {
 function processParagraphs(html) {
   const lines = html.split('\n');
   const result = [];
-  let paragraph = [];
   let inPreBlock = false;
 
   const blockElements = ['<h1', '<h2', '<h3', '<h4', '<h5', '<h6', '<ul', '<ol', '<li', '<table', '<thead', '<tbody', '<tr', '<th', '<td', '<blockquote', '<hr', '<div', '</li', '</ul', '</ol', '</table', '</thead', '</tbody', '</tr', '</blockquote', '</div'];
@@ -554,10 +553,6 @@ function processParagraphs(html) {
     const endsPre = trimmedLine.includes('</pre>');
 
     if (startsPre) {
-      if (paragraph.length > 0) {
-        result.push(`<p>${paragraph.join(' ')}</p>`);
-        paragraph = [];
-      }
       inPreBlock = !endsPre;
       result.push(line);
       continue;
@@ -573,21 +568,12 @@ function processParagraphs(html) {
 
     const isBlock = blockElements.some(tag => trimmedLine.startsWith(tag));
 
-    if (isBlock || trimmedLine === '') {
-      if (paragraph.length > 0) {
-        result.push(`<p>${paragraph.join(' ')}</p>`);
-        paragraph = [];
-      }
-      if (trimmedLine !== '') {
-        result.push(line);
-      }
-    } else {
-      paragraph.push(trimmedLine);
+    if (isBlock) {
+      result.push(line);
+    } else if (trimmedLine !== '') {
+      // 每个非空行独立成段，保留 Markdown 中的视觉换行结构
+      result.push(`<p>${trimmedLine}</p>`);
     }
-  }
-
-  if (paragraph.length > 0) {
-    result.push(`<p>${paragraph.join(' ')}</p>`);
   }
 
   return result.join('\n');

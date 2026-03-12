@@ -180,8 +180,8 @@ function createStyles() {
             after: 240
           },
           indent: {
-            left: 720,
-            firstLine: 0  // 引用块不缩进
+            left: charsToTwips(2),  // 引用块整体左缩进2字符
+            firstLine: 0            // 取消首行额外缩进
           }
         }
       }
