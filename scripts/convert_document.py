@@ -21,6 +21,8 @@ import re
 import subprocess
 import shutil
 import io
+import struct
+import hashlib
 import xml.etree.ElementTree as ET
 
 SUPPORTED_EXTENSIONS = ['.docx', '.xlsx', '.pptx', '.pdf', '.md']
@@ -30,6 +32,38 @@ NODE_SHARED_HOME_ENV = "BRUCE_DOC_CONVERTER_NODE_HOME"
 GENERATED_OUTPUT_DIR_NAMES = {"Markdown", "Word"}
 DOCX_XML_NAMESPACES = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 DOCX_W_NS = DOCX_XML_NAMESPACES['w']
+
+# 图片提取相关常量
+IMAGE_OUTPUT_DIR_NAME = "images"
+MIN_IMAGE_DIMENSION_PX = 20          # 小于此像素的图片视为装饰性
+MAX_ASPECT_RATIO = 10.0              # 宽高比超过此值视为装饰线条
+MIN_IMAGE_DATA_BYTES = 500           # 数据量低于此值视为纯色/透明占位
+PPTX_BACKGROUND_COVERAGE_RATIO = 0.9 # 覆盖幻灯片面积超过此比例视为背景图
+
+# OOXML 图片相关命名空间
+OOXML_IMAGE_NAMESPACES = {
+    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+    'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
+    'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+    'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+    'pic': 'http://schemas.openxmlformats.org/drawingml/2006/picture',
+    'mc': 'http://schemas.openxmlformats.org/markup-compatibility/2006',
+    'adec': 'http://schemas.microsoft.com/office/drawing/2017/decorative',
+    'p': 'http://schemas.openxmlformats.org/presentationml/2006/main',
+}
+
+# 图片格式文件头魔数
+_IMAGE_SIGNATURES = {
+    b'\x89PNG\r\n\x1a\n': 'png',
+    b'\xff\xd8\xff': 'jpeg',
+    b'GIF87a': 'gif',
+    b'GIF89a': 'gif',
+    b'BM': 'bmp',
+    b'II\x2a\x00': 'tiff',
+    b'MM\x00\x2a': 'tiff',
+    b'\xd7\xcd\xc6\x9a': 'wmf',
+    b'\x01\x00\x00\x00': 'emf',
+}
 
 def _configure_windows_stdio():
     """
@@ -714,14 +748,322 @@ def _is_docx_toc_paragraph(para):
             return True
     return False
 
-def convert_docx(file_path):
-    """转换 Word 文档，支持标题、格式和列表（含编号/层级）"""
+# ==================== 图片提取公共基础设施 ====================
+
+def _detect_image_format(data):
+    """通过文件头魔数识别图片格式，返回扩展名（不含点）或 None"""
+    if not data or len(data) < 8:
+        return None
+    for signature, fmt in _IMAGE_SIGNATURES.items():
+        if data[:len(signature)] == signature:
+            # EMF 需要额外验证：前 4 字节为 \x01\x00\x00\x00 且偏移 40 处有 ' EMF' 标记
+            if fmt == 'emf' and len(data) >= 44:
+                if data[40:44] != b' EMF':
+                    continue
+            return fmt
+    return None
+
+
+def _get_image_dimensions(data):
+    """
+    从图片二进制数据中解析宽高（像素）。
+    不依赖 PIL，仅通过文件头解析。
+    对于不支持解析的格式返回 (None, None)。
+    """
+    if not data or len(data) < 8:
+        return None, None
+
+    fmt = _detect_image_format(data)
+    if fmt is None:
+        return None, None
+
+    try:
+        if fmt == 'png':
+            # PNG: IHDR chunk 位于文件头之后，偏移 16 处为宽高各 4 字节大端
+            if len(data) >= 24:
+                width = struct.unpack('>I', data[16:20])[0]
+                height = struct.unpack('>I', data[20:24])[0]
+                return width, height
+
+        elif fmt == 'jpeg':
+            # JPEG: 扫描 SOF marker (0xFF 0xC0-0xCF, 排除 0xC4/0xC8/0xCC)
+            offset = 2
+            while offset < len(data) - 9:
+                if data[offset] != 0xFF:
+                    break
+                marker = data[offset + 1]
+                if marker == 0xD9:  # EOI
+                    break
+                if marker == 0xDA:  # SOS - 数据流开始，停止扫描
+                    break
+                length = struct.unpack('>H', data[offset + 2:offset + 4])[0]
+                # SOF markers: 0xC0-0xCF 但排除 DHT(0xC4)、JPG(0xC8)、DAC(0xCC)
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    if offset + 9 <= len(data):
+                        height = struct.unpack('>H', data[offset + 5:offset + 7])[0]
+                        width = struct.unpack('>H', data[offset + 7:offset + 9])[0]
+                        return width, height
+                offset += 2 + length
+
+        elif fmt == 'gif':
+            # GIF: 宽高位于偏移 6 处，各 2 字节小端
+            if len(data) >= 10:
+                width = struct.unpack('<H', data[6:8])[0]
+                height = struct.unpack('<H', data[8:10])[0]
+                return width, height
+
+        elif fmt == 'bmp':
+            # BMP: 宽高位于 DIB header 中，偏移 18 处各 4 字节小端（有符号）
+            if len(data) >= 26:
+                width = struct.unpack('<i', data[18:22])[0]
+                height = abs(struct.unpack('<i', data[22:26])[0])
+                return width, height
+
+        elif fmt == 'tiff':
+            # TIFF 解析复杂，跳过尺寸检测
+            pass
+
+    except (struct.error, IndexError):
+        pass
+
+    return None, None
+
+
+def _is_decorative_image(data, width=None, height=None, is_decorative_flag=False,
+                         is_pptx_background=False):
+    """
+    综合判定图片是否为装饰性/无意义图片。
+
+    Args:
+        data: 图片二进制数据
+        width: 图片宽度（像素），None 时自动检测
+        height: 图片高度（像素），None 时自动检测
+        is_decorative_flag: Office 文档中 adec:decorative 标记
+        is_pptx_background: PowerPoint 中覆盖整个幻灯片的背景图
+
+    Returns:
+        True 表示应过滤掉此图片
+    """
+    # 1. Office 自身的装饰性标记（最可靠）
+    if is_decorative_flag:
+        return True
+
+    # 2. PowerPoint 全屏背景图
+    if is_pptx_background:
+        return True
+
+    if not data:
+        return True
+
+    # 3. 数据量极小（纯色/透明占位）
+    if len(data) <= MIN_IMAGE_DATA_BYTES:
+        return True
+
+    # 自动检测尺寸
+    if width is None or height is None:
+        width, height = _get_image_dimensions(data)
+
+    # 4. 尺寸过小（项目符号图标、边框像素等）
+    if width is not None and height is not None:
+        if width <= MIN_IMAGE_DIMENSION_PX and height <= MIN_IMAGE_DIMENSION_PX:
+            return True
+
+        # 5. 尺寸过窄/过扁（分隔线、装饰条）
+        if width > 0 and height > 0:
+            ratio = max(width / height, height / width)
+            if ratio >= MAX_ASPECT_RATIO:
+                return True
+
+    return False
+
+
+def _setup_image_output_dir(markdown_output_path):
+    """
+    在 Markdown 输出文件旁创建 images/ 子目录。
+
+    Args:
+        markdown_output_path: Markdown 输出文件的绝对路径
+
+    Returns:
+        (image_save_dir, image_rel_dir) 绝对路径和相对路径
+    """
+    md_dir = os.path.dirname(markdown_output_path)
+    image_save_dir = os.path.join(md_dir, IMAGE_OUTPUT_DIR_NAME)
+    os.makedirs(image_save_dir, exist_ok=True)
+    return image_save_dir, IMAGE_OUTPUT_DIR_NAME
+
+
+def _save_extracted_image(data, image_save_dir, image_rel_dir, base_name, image_counter):
+    """
+    保存图片到 images/ 目录。
+
+    Args:
+        data: 图片二进制数据
+        image_save_dir: images/ 目录绝对路径
+        image_rel_dir: images/ 相对路径（用于 Markdown 引用）
+        base_name: 文档基础名称（不含扩展名）
+        image_counter: 图片序号
+
+    Returns:
+        相对路径字符串，如 'images/report_img_001.png'，失败返回 None
+    """
+    fmt = _detect_image_format(data)
+    if fmt is None:
+        # 尝试猜测，默认保存为 png
+        fmt = 'png'
+
+    # 对 wmf/emf 保持原格式
+    ext = fmt
+    filename = f"{base_name}_img_{image_counter:03d}.{ext}"
+    abs_path = os.path.join(image_save_dir, filename)
+
+    try:
+        with open(abs_path, 'wb') as f:
+            f.write(data)
+        # 使用正斜杠确保 Markdown 跨平台兼容
+        return f"{image_rel_dir}/{filename}"
+    except Exception:
+        return None
+
+
+def _make_image_markdown(rel_path, alt_text=None):
+    """生成 Markdown 图片语法"""
+    alt = alt_text.strip() if alt_text else "image"
+    # 转义 alt 文本中的 Markdown 特殊字符
+    alt = alt.replace('[', '\\[').replace(']', '\\]')
+    return f"![{alt}]({rel_path})"
+
+
+def _check_ooxml_decorative_flag(element, namespaces=None):
+    """
+    检查 OOXML 元素是否标记为装饰性（adec:decorative val="1"）。
+    同时获取元素的 alt text（descr 属性）。
+
+    Args:
+        element: lxml/ET 元素（通常是 docPr 或 cNvPr）
+        namespaces: 命名空间字典
+
+    Returns:
+        (is_decorative, alt_text) 元组
+    """
+    if element is None:
+        return False, ""
+
+    ns = namespaces or OOXML_IMAGE_NAMESPACES
+    is_decorative = False
+    alt_text = ""
+
+    # 尝试从 docPr / cNvPr 读取 descr 属性
+    alt_text = element.get('descr', '') or ''
+
+    # 检查 adec:decorative 子元素
+    adec_ns = ns.get('adec', 'http://schemas.microsoft.com/office/drawing/2017/decorative')
+    for child in element:
+        tag = child.tag
+        # 处理带命名空间和不带命名空间两种情况
+        if tag == f'{{{adec_ns}}}decorative' or tag.endswith('}decorative'):
+            if child.get('val', '0') == '1':
+                is_decorative = True
+                break
+
+    return is_decorative, alt_text
+
+def convert_docx(file_path, image_save_dir=None, image_rel_dir=None):
+    """转换 Word 文档，支持标题、格式、列表（含编号/层级）和图片提取"""
     import docx
 
     doc = docx.Document(file_path)
     content = ""
     num_to_abstract, abstract_levels = _build_docx_numbering_index(doc)
     numbering_state = {}
+    image_counter = [0]  # 使用列表以便在内部函数中修改
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    extracted_images = []
+
+    def _extract_drawing_images(paragraph_element):
+        """
+        从段落 XML 中提取图片。
+        支持 w:drawing（内联和浮动）以及 mc:AlternateContent 包裹的图片。
+
+        Returns:
+            图片 Markdown 字符串列表
+        """
+        if image_save_dir is None:
+            return []
+
+        image_markdowns = []
+        ns = OOXML_IMAGE_NAMESPACES
+
+        try:
+            p_xml = ET.fromstring(paragraph_element.xml)
+        except (ET.ParseError, AttributeError):
+            return []
+
+        # 查找所有 drawing 元素（直接和通过 mc:AlternateContent 包裹的）
+        drawings = []
+        # 直接 w:drawing
+        for drawing in p_xml.findall('.//w:drawing', ns):
+            drawings.append(drawing)
+        # mc:AlternateContent -> mc:Choice -> w:drawing
+        for alt_content in p_xml.findall('.//mc:AlternateContent', ns):
+            for choice in alt_content.findall('.//mc:Choice', ns):
+                for drawing in choice.findall('.//w:drawing', ns):
+                    if drawing not in drawings:
+                        drawings.append(drawing)
+            # mc:Fallback 中也可能有图片
+            for fallback in alt_content.findall('.//mc:Fallback', ns):
+                for drawing in fallback.findall('.//w:drawing', ns):
+                    if drawing not in drawings:
+                        drawings.append(drawing)
+
+        for drawing in drawings:
+            # 获取 docPr 以检查装饰性标记和 alt text
+            doc_pr = drawing.find('.//wp:docPr', ns)
+            if doc_pr is None:
+                doc_pr = drawing.find('.//{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}docPr')
+
+            is_decorative = False
+            alt_text = ""
+            if doc_pr is not None:
+                is_decorative, alt_text = _check_ooxml_decorative_flag(doc_pr, ns)
+
+            # 获取图片数据：通过 a:blip 的 r:embed 属性
+            blip = drawing.find('.//a:blip', ns)
+            if blip is None:
+                continue
+
+            embed_id = blip.get(f'{{{ns["r"]}}}embed') or blip.get('embed')
+            if not embed_id:
+                continue
+
+            # 从 document part 的 related_parts 获取图片数据
+            try:
+                image_part = doc.part.related_parts.get(embed_id)
+                if image_part is None:
+                    continue
+                image_data = image_part.blob
+            except Exception:
+                continue
+
+            if not image_data:
+                continue
+
+            # 装饰性过滤
+            if _is_decorative_image(image_data, is_decorative_flag=is_decorative):
+                continue
+
+            # 保存图片
+            image_counter[0] += 1
+            rel_path = _save_extracted_image(
+                image_data, image_save_dir, image_rel_dir,
+                base_name, image_counter[0]
+            )
+            if rel_path:
+                extracted_images.append(rel_path)
+                md = _make_image_markdown(rel_path, alt_text)
+                image_markdowns.append(md)
+
+        return image_markdowns
 
     def get_numbering_info(para):
         """
@@ -847,6 +1189,9 @@ def convert_docx(file_path):
             para = next(paragraphs_iter, None)
             if para is not None:
                 content += process_paragraph(para)
+                # 提取段落中的图片
+                for img_md in _extract_drawing_images(para._p):
+                    content += f"\n{img_md}\n\n"
 
         # 处理表格
         elif element.tag.endswith('tbl'):
@@ -878,15 +1223,18 @@ def convert_docx(file_path):
                         content += "| " + " | ".join(["---"] * max_cols) + " |\n"
                 content += "\n"
 
-    return content.strip()
+    return content.strip(), extracted_images
 
-def convert_xlsx(file_path):
-    """转换 Excel 文件，支持多表头、空白分隔区、冻结窗格和常见格式保留"""
+def convert_xlsx(file_path, image_save_dir=None, image_rel_dir=None):
+    """转换 Excel 文件，支持多表头、空白分隔区、冻结窗格、常见格式保留和图片提取"""
     import openpyxl
     from datetime import date, datetime, time
 
     workbook = openpyxl.load_workbook(file_path, data_only=True)
     content = ""
+    image_counter = [0]
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    extracted_images = []
 
     def _build_merge_map(worksheet):
         """构建合并单元格续格坐标集合，用于保留占位但不重复填充值"""
@@ -1188,13 +1536,73 @@ def convert_xlsx(file_path):
             elif len(table_blocks) > 1:
                 for idx, table_markdown in enumerate(table_blocks, 1):
                     content += f"### Table {idx}\n\n{table_markdown}\n\n"
+
+            # 提取 worksheet 中的嵌入图片
+            if image_save_dir is not None:
+                try:
+                    ws_images = getattr(worksheet, '_images', []) or []
+                    # 按锚定行号排序
+                    sorted_images = []
+                    for img_obj in ws_images:
+                        try:
+                            anchor = getattr(img_obj, 'anchor', None)
+                            anchor_from = getattr(anchor, '_from', None) if anchor else None
+                            row = getattr(anchor_from, 'row', 0) if anchor_from else 0
+                            col = getattr(anchor_from, 'col', 0) if anchor_from else 0
+                            sorted_images.append((row, col, img_obj))
+                        except Exception:
+                            sorted_images.append((0, 0, img_obj))
+                    sorted_images.sort(key=lambda x: (x[0], x[1]))
+
+                    for _row, _col, img_obj in sorted_images:
+                        try:
+                            # 获取图片数据
+                            img_ref = getattr(img_obj, 'ref', None) or getattr(img_obj, '_data', None)
+                            image_data = None
+                            if img_ref is not None:
+                                # openpyxl Image 对象的图片数据
+                                if hasattr(img_ref, 'read'):
+                                    img_ref.seek(0)
+                                    image_data = img_ref.read()
+                                elif isinstance(img_ref, bytes):
+                                    image_data = img_ref
+                            # 回退：尝试从 _data 属性读取
+                            if image_data is None and hasattr(img_obj, '_data'):
+                                raw = img_obj._data
+                                if callable(raw):
+                                    raw = raw()
+                                if isinstance(raw, bytes):
+                                    image_data = raw
+                                elif hasattr(raw, 'read'):
+                                    raw.seek(0)
+                                    image_data = raw.read()
+
+                            if not image_data:
+                                continue
+
+                            # 装饰性过滤
+                            if _is_decorative_image(image_data):
+                                continue
+
+                            image_counter[0] += 1
+                            rel_path = _save_extracted_image(
+                                image_data, image_save_dir, image_rel_dir,
+                                base_name, image_counter[0]
+                            )
+                            if rel_path:
+                                extracted_images.append(rel_path)
+                                content += f"{_make_image_markdown(rel_path)}\n\n"
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
     finally:
         workbook.close()
 
-    return content.strip()
+    return content.strip(), extracted_images
 
-def convert_pptx(file_path):
-    """转换 PowerPoint 文件，提取标题、正文、表格、图表、图片说明和备注"""
+def convert_pptx(file_path, image_save_dir=None, image_rel_dir=None):
+    """转换 PowerPoint 文件，提取标题、正文、表格、图表、图片和备注"""
     import pptx
     from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
@@ -1202,6 +1610,9 @@ def convert_pptx(file_path):
     content = ""
     slide_width = presentation.slide_width
     slide_height = presentation.slide_height
+    image_counter = [0]
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    extracted_images = []
 
     def _process_text_frame(text_frame, role="body"):
         """处理文本框，保留段落层级和格式"""
@@ -1347,7 +1758,13 @@ def convert_pptx(file_path):
 
         return "\n".join(lines).strip()
 
-    def _render_picture_markdown(caption_text=None):
+    def _render_picture_markdown(caption_text=None, image_path=None, alt_text=None):
+        if image_path:
+            alt = alt_text or caption_text or "image"
+            md = _make_image_markdown(image_path, alt)
+            if caption_text:
+                return f"{md}\nCaption: {caption_text}"
+            return md
         if caption_text:
             return f"**Image**\nCaption: {caption_text}"
         return "**Image**"
@@ -1466,6 +1883,56 @@ def convert_pptx(file_path):
                 entry["markdown"] = _render_chart_markdown(shape.chart)
             elif getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE:
                 entry["kind"] = "picture"
+                # 提取图片数据和元数据
+                entry["image_path"] = None
+                entry["image_alt"] = ""
+                if image_save_dir is not None:
+                    try:
+                        image_data = shape.image.blob
+                        # 检查装饰性标记：通过 shape XML 中的 cNvPr
+                        is_decorative = False
+                        alt_text = ""
+                        try:
+                            sp_xml = ET.fromstring(shape._element.xml)
+                            # PPTX 中 cNvPr 可能在 p:nvPicPr/p:cNvPr 或 nvSpPr/cNvPr
+                            cnv_pr = sp_xml.find('.//{http://schemas.openxmlformats.org/presentationml/2006/main}cNvPr')
+                            if cnv_pr is None:
+                                cnv_pr = sp_xml.find('.//{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}cNvPr')
+                            if cnv_pr is None:
+                                # 用更通用的查找
+                                for elem in sp_xml.iter():
+                                    if elem.tag.endswith('}cNvPr') or elem.tag == 'cNvPr':
+                                        cnv_pr = elem
+                                        break
+                            if cnv_pr is not None:
+                                is_decorative, alt_text = _check_ooxml_decorative_flag(cnv_pr)
+                        except Exception:
+                            pass
+
+                        # 检查是否为背景图（覆盖面积 >= 90% 幻灯片）
+                        is_background = False
+                        if slide_width and slide_height:
+                            shape_area = entry["width"] * entry["height"]
+                            slide_area = slide_width * slide_height
+                            if slide_area > 0 and shape_area / slide_area >= PPTX_BACKGROUND_COVERAGE_RATIO:
+                                is_background = True
+
+                        if not _is_decorative_image(
+                            image_data,
+                            is_decorative_flag=is_decorative,
+                            is_pptx_background=is_background
+                        ):
+                            image_counter[0] += 1
+                            rel_path = _save_extracted_image(
+                                image_data, image_save_dir, image_rel_dir,
+                                base_name, image_counter[0]
+                            )
+                            if rel_path:
+                                extracted_images.append(rel_path)
+                                entry["image_path"] = rel_path
+                                entry["image_alt"] = alt_text
+                    except Exception:
+                        pass
             elif getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.DIAGRAM:
                 entry["kind"] = "diagram"
                 entry["markdown"] = _render_diagram_markdown(shape)
@@ -1512,11 +1979,14 @@ def convert_pptx(file_path):
 
         for entry in [entry for entry in entries if entry["kind"] == "picture"]:
             caption_entry = _find_picture_caption(entries, entry)
+            caption_text = caption_entry["raw_text"] if caption_entry else None
             if caption_entry is not None:
                 caption_entry["consumed"] = True
-                entry["markdown"] = _render_picture_markdown(caption_entry["raw_text"])
-            else:
-                entry["markdown"] = _render_picture_markdown()
+            entry["markdown"] = _render_picture_markdown(
+                caption_text=caption_text,
+                image_path=entry.get("image_path"),
+                alt_text=entry.get("image_alt")
+            )
 
         title_entries = sorted([entry for entry in entries if entry["role"] == "title"], key=_shape_sort_key)
         subtitle_entries = sorted([entry for entry in entries if entry["role"] == "subtitle"], key=_shape_sort_key)
@@ -1573,7 +2043,7 @@ def convert_pptx(file_path):
         if i < len(presentation.slides):
             content += "---\n\n"
 
-    return content.strip()
+    return content.strip(), extracted_images
 
 def _render_pdf_table(table_obj):
     """将 pdfplumber 表格对象渲染为 Markdown 表格字符串"""
@@ -2142,11 +2612,11 @@ def convert_document(file_path, extract_images=True, output_dir=None):
 
     Args:
         file_path: 文档文件路径
-        extract_images: 是否提取图片（当前版本暂不支持）
+        extract_images: 是否提取图片（默认 True，支持 Word/Excel/PowerPoint）
         output_dir: 可选的输出目录（默认为同目录下的 Markdown/ 子目录）
 
     Returns:
-        包含 'success'、'markdown_content'、'output_path' 和可选 'error' 的字典
+        包含 'success'、'markdown_content'、'output_path'、可选 'extracted_images' 和 'error' 的字典
     """
     # 验证输入文件
     file_path, input_error = _validate_input_file(file_path)
@@ -2191,13 +2661,29 @@ def convert_document(file_path, extract_images=True, output_dir=None):
         }
 
     try:
+        # 预先确定输出路径，以便设置图片目录
+        output_path = _resolve_markdown_output_path(file_path, output_dir)
+
+        # 设置图片提取目录
+        image_save_dir = None
+        image_rel_dir = None
+        if extract_images and file_ext in ('.docx', '.xlsx', '.pptx'):
+            image_save_dir, image_rel_dir = _setup_image_output_dir(output_path)
+
         # 根据文件类型转换
+        extracted_images = []
         if file_ext == '.docx':
-            markdown_content = convert_docx(file_path)
+            markdown_content, extracted_images = convert_docx(
+                file_path, image_save_dir=image_save_dir, image_rel_dir=image_rel_dir
+            )
         elif file_ext == '.xlsx':
-            markdown_content = convert_xlsx(file_path)
+            markdown_content, extracted_images = convert_xlsx(
+                file_path, image_save_dir=image_save_dir, image_rel_dir=image_rel_dir
+            )
         elif file_ext == '.pptx':
-            markdown_content = convert_pptx(file_path)
+            markdown_content, extracted_images = convert_pptx(
+                file_path, image_save_dir=image_save_dir, image_rel_dir=image_rel_dir
+            )
         elif file_ext == '.pdf':
             markdown_content = convert_pdf(file_path)
         else:
@@ -2215,9 +2701,6 @@ def convert_document(file_path, extract_images=True, output_dir=None):
                 }
             warning = '未提取到任何可写入的内容，原文档可能为空，或仅包含当前版本暂不支持的对象。'
 
-        # 确定输出路径
-        output_path = _resolve_markdown_output_path(file_path, output_dir)
-
         # 保存 Markdown 文件
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(markdown_content)
@@ -2227,6 +2710,8 @@ def convert_document(file_path, extract_images=True, output_dir=None):
             'markdown_content': markdown_content,
             'output_path': output_path
         }
+        if extracted_images:
+            result['extracted_images'] = extracted_images
         if warning:
             result['warning'] = warning
         return result
@@ -2303,7 +2788,7 @@ def main():
     if len(sys.argv) < 2:
         print('用法: python convert_document.py <file_path> [extract_images] [output_dir]')
         print('  file_path: 文档文件路径')
-        print('  extract_images: true/false (默认: true，当前版本暂不支持)')
+        print('  extract_images: true/false (默认: true，提取图片到 images/ 子目录)')
         print('  output_dir: 可选的输出目录')
         print('')
         print('支持的格式:')

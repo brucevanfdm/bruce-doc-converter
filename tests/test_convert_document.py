@@ -14,7 +14,10 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from scripts.convert_document import (
+    _detect_image_format,
     _extract_pdf_page_blocks,
+    _get_image_dimensions,
+    _is_decorative_image,
     _postprocess_pdf_academic_sections,
     _render_docx_list_marker,
     batch_convert,
@@ -394,6 +397,176 @@ Proof details.
         self.assertIn("1. First ref", rendered)
         self.assertIn("1. Second ref", rendered)
         self.assertIn("## Appendix A", rendered)
+
+    # ==================== 图片提取测试 ====================
+
+    # 1x1 透明 PNG（用于测试装饰性过滤 —— 数据量极小）
+    _TINY_PNG = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jxM0AAAAASUVORK5CYII="
+    )
+
+    # 100x80 红色 PNG（用于测试正常图片提取）
+    @staticmethod
+    def _make_test_png(width=100, height=80):
+        """Generate a minimal valid PNG with specified dimensions."""
+        import struct
+        import zlib
+
+        def _chunk(chunk_type, data):
+            raw = chunk_type + data
+            crc = struct.pack('>I', zlib.crc32(raw) & 0xFFFFFFFF)
+            return struct.pack('>I', len(data)) + raw + crc
+
+        header = b'\x89PNG\r\n\x1a\n'
+        ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)  # 8-bit RGB
+        ihdr = _chunk(b'IHDR', ihdr_data)
+
+        # Create scanlines: each row is filter byte (0) + RGB pixels
+        raw_data = b''
+        for _ in range(height):
+            raw_data += b'\x00'  # filter byte
+            raw_data += b'\xff\x00\x00' * width  # red pixels
+
+        compressed = zlib.compress(raw_data)
+        idat = _chunk(b'IDAT', compressed)
+        iend = _chunk(b'IEND', b'')
+
+        return header + ihdr + idat + iend
+
+    def test_detect_image_format_identifies_common_formats(self):
+        self.assertEqual(_detect_image_format(b'\x89PNG\r\n\x1a\n' + b'\x00' * 20), 'png')
+        self.assertEqual(_detect_image_format(b'\xff\xd8\xff' + b'\x00' * 20), 'jpeg')
+        self.assertEqual(_detect_image_format(b'GIF89a' + b'\x00' * 20), 'gif')
+        self.assertEqual(_detect_image_format(b'BM' + b'\x00' * 20), 'bmp')
+        self.assertIsNone(_detect_image_format(b'\x00\x00\x00\x00'))
+
+    def test_get_image_dimensions_reads_png_size(self):
+        png_data = self._make_test_png(200, 150)
+        width, height = _get_image_dimensions(png_data)
+        self.assertEqual(width, 200)
+        self.assertEqual(height, 150)
+
+    def test_is_decorative_filters_tiny_data(self):
+        self.assertTrue(_is_decorative_image(b'\x00' * 100))  # 数据量极小
+        self.assertTrue(_is_decorative_image(b''))              # 空数据
+        self.assertTrue(_is_decorative_image(None))             # None
+
+    def test_is_decorative_filters_by_flag(self):
+        png_data = self._make_test_png(200, 150)
+        self.assertTrue(_is_decorative_image(png_data, is_decorative_flag=True))
+        self.assertFalse(_is_decorative_image(png_data, is_decorative_flag=False))
+
+    def test_is_decorative_filters_pptx_background(self):
+        png_data = self._make_test_png(200, 150)
+        self.assertTrue(_is_decorative_image(png_data, is_pptx_background=True))
+
+    def test_is_decorative_filters_tiny_dimensions(self):
+        tiny_png = self._make_test_png(10, 10)
+        self.assertTrue(_is_decorative_image(tiny_png))
+
+    def test_is_decorative_passes_normal_image(self):
+        normal_png = self._make_test_png(200, 150)
+        self.assertFalse(_is_decorative_image(normal_png))
+
+    def test_convert_docx_extracts_inline_image(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            docx_path = tmp_path / "with_image.docx"
+            output_dir = tmp_path / "out"
+
+            document = Document()
+            document.add_paragraph("全图前文")
+            # Add inline image
+            png_data = self._make_test_png(200, 150)
+            img_path = tmp_path / "test_img.png"
+            img_path.write_bytes(png_data)
+            document.add_picture(str(img_path), width=Inches(2))
+            document.add_paragraph("图片后文")
+            document.save(docx_path)
+
+            result = convert_document(str(docx_path), extract_images=True, output_dir=str(output_dir))
+
+            self.assertTrue(result["success"], result)
+            self.assertIn("全图前文", result["markdown_content"])
+            self.assertIn("图片后文", result["markdown_content"])
+            # Should have extracted image reference
+            self.assertIn("![image]", result["markdown_content"])
+            self.assertIn("images/", result["markdown_content"])
+            # Image file should exist
+            self.assertIn("extracted_images", result)
+            self.assertTrue(len(result["extracted_images"]) > 0)
+            img_file = output_dir / result["extracted_images"][0]
+            self.assertTrue(img_file.exists())
+
+    def test_convert_docx_no_images_when_extract_false(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            docx_path = tmp_path / "with_image.docx"
+            output_dir = tmp_path / "out"
+
+            document = Document()
+            png_data = self._make_test_png(200, 150)
+            img_path = tmp_path / "test_img.png"
+            img_path.write_bytes(png_data)
+            document.add_picture(str(img_path), width=Inches(2))
+            document.save(docx_path)
+
+            result = convert_document(str(docx_path), extract_images=False, output_dir=str(output_dir))
+
+            self.assertTrue(result["success"], result)
+            self.assertNotIn("![image]", result["markdown_content"])
+            self.assertNotIn("extracted_images", result)
+
+    def test_convert_pptx_extracts_picture_image(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            pptx_path = tmp_path / "with_pic.pptx"
+            output_dir = tmp_path / "out"
+
+            png_data = self._make_test_png(300, 200)
+            img_path = tmp_path / "slide_img.png"
+            img_path.write_bytes(png_data)
+
+            presentation = Presentation()
+            slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+            slide.shapes.add_picture(str(img_path), Inches(1), Inches(1.5), Inches(3), Inches(2))
+            presentation.save(pptx_path)
+
+            result = convert_document(str(pptx_path), extract_images=True, output_dir=str(output_dir))
+
+            self.assertTrue(result["success"], result)
+            markdown = result["markdown_content"]
+            # Should have image link instead of **Image** placeholder
+            self.assertIn("![", markdown)
+            self.assertIn("images/", markdown)
+            self.assertNotIn("**Image**", markdown)
+            self.assertIn("extracted_images", result)
+            self.assertTrue(len(result["extracted_images"]) > 0)
+
+    def test_convert_pptx_filters_background_image(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            pptx_path = tmp_path / "background.pptx"
+            output_dir = tmp_path / "out"
+
+            png_data = self._make_test_png(300, 200)
+            img_path = tmp_path / "bg_img.png"
+            img_path.write_bytes(png_data)
+
+            presentation = Presentation()
+            slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+            # Add full-slide-size picture (should be filtered as background)
+            slide_w = presentation.slide_width
+            slide_h = presentation.slide_height
+            slide.shapes.add_picture(str(img_path), 0, 0, slide_w, slide_h)
+            presentation.save(pptx_path)
+
+            result = convert_document(str(pptx_path), extract_images=True, output_dir=str(output_dir))
+
+            self.assertTrue(result["success"], result)
+            # Background image should be filtered out
+            self.assertNotIn("extracted_images", result)
+            self.assertNotIn("![image]", result["markdown_content"])
 
 
 if __name__ == "__main__":
