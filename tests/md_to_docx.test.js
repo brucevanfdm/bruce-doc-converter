@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { markdownToHTML } = require('../scripts/md_to_docx/markdown-converter');
-const { convertHTMLToDocx } = require('../scripts/md_to_docx/html-converter');
+const { markdownToHTML } = require('../bruce_doc_converter/md_to_docx/markdown-converter');
+const { convertHTMLToDocx } = require('../bruce_doc_converter/md_to_docx/html-converter');
 
 test('markdown 表格支持转义管道符', async () => {
   const markdown = [
