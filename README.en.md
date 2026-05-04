@@ -71,6 +71,36 @@ bdc --help-json
 }
 ```
 
+### Batch output
+
+For batch conversion, `success` means every file converted successfully. If only some files fail, `success` is `false`, while `succeeded`, `failed`, and `results` still report per-file details.
+
+```json
+{
+  "schema_version": "1.0",
+  "success": true,
+  "total": 1,
+  "succeeded": 1,
+  "failed": 0,
+  "results": [
+    {
+      "input_path": "/absolute/input.docx",
+      "result": {
+        "schema_version": "1.0",
+        "success": true,
+        "input_path": "/absolute/input.docx",
+        "input_format": "docx",
+        "output_format": "markdown",
+        "output_path": "/absolute/Markdown/input.md",
+        "markdown_content": "# content...",
+        "extracted_images": [],
+        "warnings": []
+      }
+    }
+  ]
+}
+```
+
 ## Features
 
 - **Heading detection**: Automatically recognizes Word heading levels (Heading 1–6) and Chinese heading styles

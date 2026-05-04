@@ -71,6 +71,36 @@ bdc --help-json
 }
 ```
 
+### 输出示例（批量转换）
+
+批量转换的 `success` 表示是否所有文件都转换成功；部分失败时 `success` 为 `false`，但 `succeeded`、`failed` 和 `results` 会保留每个文件的明细。
+
+```json
+{
+  "schema_version": "1.0",
+  "success": true,
+  "total": 1,
+  "succeeded": 1,
+  "failed": 0,
+  "results": [
+    {
+      "input_path": "/absolute/input.docx",
+      "result": {
+        "schema_version": "1.0",
+        "success": true,
+        "input_path": "/absolute/input.docx",
+        "input_format": "docx",
+        "output_format": "markdown",
+        "output_path": "/absolute/Markdown/input.md",
+        "markdown_content": "# 内容...",
+        "extracted_images": [],
+        "warnings": []
+      }
+    }
+  ]
+}
+```
+
 ## 功能特性
 
 - **标题识别**：自动识别 Word 标题层级（Heading 1-6）及中文标题样式

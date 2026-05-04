@@ -32,12 +32,14 @@ class _JsonArgumentParser(argparse.ArgumentParser):
     """ArgumentParser that emits JSON on error instead of human-readable text."""
 
     def error(self, message):
-        _emit(_usage_error(message), 0)
+        _emit(_usage_error(message), 1)
         sys.exit(1)
 
 
 def _format_of(path):
     ext = os.path.splitext(str(path))[1].lower()
+    if not ext:
+        return "unknown"
     return ext[1:] if ext.startswith(".") else ext
 
 
@@ -102,7 +104,7 @@ def _normalize_single_result(input_path, result):
         return payload
 
     error = result.get("error", "转换失败")
-    error_code = _classify_error(error)
+    error_code = result.get("error_code") or _classify_error(error)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "success": False,
@@ -178,13 +180,13 @@ def main(argv=None):
             extract_images=namespace.extract_images == "true",
             output_dir=output_dir,
         )
-        results = [
-            {
-                "file": item["file"],
-                "result": _normalize_single_result(item["file"], item["result"]),
-            }
-            for item in raw_results
-        ]
+        results = []
+        for item in raw_results:
+            result_payload = _normalize_single_result(item["file"], item["result"])
+            results.append({
+                "input_path": result_payload["input_path"],
+                "result": result_payload,
+            })
         succeeded = sum(1 for item in results if item["result"]["success"])
         total = len(results)
         payload = {

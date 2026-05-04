@@ -484,14 +484,21 @@ def _resolve_docx_run_font_flag(run, paragraph, attr_name, *, allow_paragraph_st
 def _validate_input_file(file_path):
     """校验并规范化输入文件路径"""
     if file_path is None:
-        return None, "文件路径不能为空"
+        return None, "文件路径不能为空", "USAGE_ERROR"
 
     normalized = os.path.abspath(os.path.normpath(os.path.expanduser(str(file_path))))
     if not os.path.exists(normalized):
-        return None, f'文件不存在: {normalized}'
+        return None, f'文件不存在: {normalized}', "FILE_NOT_FOUND"
     if not os.path.isfile(normalized):
-        return None, f'输入路径不是文件: {normalized}'
-    return normalized, None
+        return None, f'输入路径不是文件: {normalized}', "NOT_A_FILE"
+    return normalized, None, None
+
+def _error_result(error_code, error):
+    return {
+        'success': False,
+        'error_code': error_code,
+        'error': error,
+    }
 
 def _resolve_markdown_output_path(file_path, output_dir=None):
     """生成 Markdown 输出路径，并确保输出目录可用"""
@@ -2590,20 +2597,20 @@ def convert_md(file_path, output_dir=None):
     # 检查 Node.js 是否可用
     node_cmd = shutil.which('node')
     if not node_cmd:
-        return {
-            'success': False,
-            'error': '未找到 Node.js。Markdown 转 DOCX 需要 Node.js 环境。请安装 Node.js: https://nodejs.org/'
-        }
+        return _error_result(
+            'NODE_NOT_FOUND',
+            '未找到 Node.js。Markdown 转 DOCX 需要 Node.js 环境。请安装 Node.js: https://nodejs.org/'
+        )
 
     # 获取 Node.js 脚本路径
     script_dir = os.path.dirname(os.path.abspath(__file__))
     node_script = os.path.join(script_dir, 'md_to_docx', 'index.js')
 
     if not os.path.exists(node_script):
-        return {
-            'success': False,
-            'error': f'Node.js 转换脚本不存在: {node_script}。请运行 npm install 安装依赖。'
-        }
+        return _error_result(
+            'NODE_CONVERSION_FAILED',
+            f'Node.js 转换脚本不存在: {node_script}。请运行 npm install 安装依赖。'
+        )
 
     source_dir = os.path.join(script_dir, 'md_to_docx')
     local_node_modules = os.path.join(source_dir, 'node_modules')
@@ -2619,16 +2626,16 @@ def convert_md(file_path, output_dir=None):
     if need_shared and shared_mmdc is None:
         ok, err = _ensure_shared_node_modules(shared_dir, source_dir)
         if not ok:
-            return {
-                'success': False,
-                'error': (
+            return _error_result(
+                'DEPENDENCY_INSTALL_FAILED',
+                (
                     f"{err}\n"
                     f"可手动安装：\n"
                     f"  1) 本地安装：cd {source_dir} && npm install\n"
                     f"  2) 共享安装：cd {shared_dir} && npm install\n"
                     f"可通过环境变量 {NODE_SHARED_HOME_ENV} 指定共享目录。"
                 )
-            }
+            )
         shared_mmdc = _find_mmdc_binary(shared_node_modules)
 
     if need_shared and shared_mmdc:
@@ -2667,6 +2674,8 @@ def convert_md(file_path, output_dir=None):
         try:
             stdout_text = result.stdout or ""
             output = json.loads(stdout_text)
+            if not output.get('success') and not output.get('error_code'):
+                output['error_code'] = 'NODE_CONVERSION_FAILED'
             return output
         except json.JSONDecodeError:
             if result.returncode == 0:
@@ -2678,21 +2687,15 @@ def convert_md(file_path, output_dir=None):
             else:
                 stdout_text = (result.stdout or "").strip()
                 stderr_text = (result.stderr or "").strip()
-                return {
-                    'success': False,
-                    'error': f'Node.js 脚本输出解析失败: {stdout_text}\n{stderr_text}'
-                }
+                return _error_result(
+                    'NODE_CONVERSION_FAILED',
+                    f'Node.js 脚本输出解析失败: {stdout_text}\n{stderr_text}'
+                )
 
     except subprocess.TimeoutExpired:
-        return {
-            'success': False,
-            'error': '转换超时（超过2分钟）'
-        }
+        return _error_result('CONVERSION_TIMEOUT', '转换超时（超过2分钟）')
     except Exception as e:
-        return {
-            'success': False,
-            'error': f'调用 Node.js 脚本失败: {str(e)}'
-        }
+        return _error_result('NODE_CONVERSION_FAILED', f'调用 Node.js 脚本失败: {str(e)}')
 
 def convert_document(file_path, extract_images=True, output_dir=None):
     """
@@ -2707,34 +2710,28 @@ def convert_document(file_path, extract_images=True, output_dir=None):
         包含 'success'、'markdown_content'、'output_path'、可选 'extracted_images' 和 'error' 的字典
     """
     # 验证输入文件
-    file_path, input_error = _validate_input_file(file_path)
+    file_path, input_error, input_error_code = _validate_input_file(file_path)
     if input_error:
-        return {
-            'success': False,
-            'error': input_error
-        }
+        return _error_result(input_error_code, input_error)
 
     # 检查文件大小（限制为100MB）
     try:
         file_size = os.path.getsize(file_path)
         if file_size > MAX_FILE_SIZE_BYTES:
-            return {
-                'success': False,
-                'error': f'文件过大: {file_size / (1024*1024):.2f}MB，超过限制 {MAX_FILE_SIZE_BYTES / (1024*1024):.0f}MB'
-            }
+            return _error_result(
+                'FILE_TOO_LARGE',
+                f'文件过大: {file_size / (1024*1024):.2f}MB，超过限制 {MAX_FILE_SIZE_BYTES / (1024*1024):.0f}MB'
+            )
     except OSError as e:
-        return {
-            'success': False,
-            'error': f'无法读取文件大小: {str(e)}'
-        }
+        return _error_result('OS_ERROR', f'无法读取文件大小: {str(e)}')
 
     # 检查文件扩展名
     file_ext = os.path.splitext(file_path)[1].lower()
     if file_ext not in SUPPORTED_EXTENSIONS:
-        return {
-            'success': False,
-            'error': f'不支持的文件格式: {file_ext}。支持的格式: {", ".join(SUPPORTED_EXTENSIONS)}'
-        }
+        return _error_result(
+            'UNSUPPORTED_FORMAT',
+            f'不支持的文件格式: {file_ext}。支持的格式: {", ".join(SUPPORTED_EXTENSIONS)}'
+        )
 
     # Markdown 转 DOCX 使用单独的处理流程
     if file_ext == '.md':
@@ -2743,10 +2740,7 @@ def convert_document(file_path, extract_images=True, output_dir=None):
     # 检查依赖（按格式按需检查，避免无关依赖阻塞）
     deps_ok, error_msg = check_dependencies(file_ext)
     if not deps_ok:
-        return {
-            'success': False,
-            'error': error_msg
-        }
+        return _error_result('DEPENDENCY_INSTALL_FAILED', error_msg)
 
     try:
         # 预先确定输出路径，以便设置图片目录
@@ -2775,18 +2769,15 @@ def convert_document(file_path, extract_images=True, output_dir=None):
         elif file_ext == '.pdf':
             markdown_content = convert_pdf(file_path)
         else:
-            return {
-                'success': False,
-                'error': f'不支持的文件类型: {file_ext}'
-            }
+            return _error_result('UNSUPPORTED_FORMAT', f'不支持的文件类型: {file_ext}')
 
         warning = None
         if not markdown_content.strip():
             if file_ext == '.pdf':
-                return {
-                    'success': False,
-                    'error': 'PDF 未提取到任何文本或表格，文件可能是扫描件、受保护文档，或仅包含图片。请先进行 OCR 或解除保护后再试。'
-                }
+                return _error_result(
+                    'EMPTY_PDF_CONTENT',
+                    'PDF 未提取到任何文本或表格，文件可能是扫描件、受保护文档，或仅包含图片。请先进行 OCR 或解除保护后再试。'
+                )
             warning = '未提取到任何可写入的内容，原文档可能为空，或仅包含当前版本暂不支持的对象。'
 
         # 保存 Markdown 文件
@@ -2805,30 +2796,15 @@ def convert_document(file_path, extract_images=True, output_dir=None):
         return result
 
     except PermissionError as e:
-        return {
-            'success': False,
-            'error': f'权限不足: 无法读取文件或写入输出目录 - {str(e)}'
-        }
+        return _error_result('PERMISSION_DENIED', f'权限不足: 无法读取文件或写入输出目录 - {str(e)}')
     except MemoryError:
-        return {
-            'success': False,
-            'error': '内存不足: 文件可能过大，请尝试处理较小的文件'
-        }
+        return _error_result('OUT_OF_MEMORY', '内存不足: 文件可能过大，请尝试处理较小的文件')
     except FileNotFoundError as e:
-        return {
-            'success': False,
-            'error': f'文件未找到: {str(e)}'
-        }
+        return _error_result('FILE_NOT_FOUND', f'文件未找到: {str(e)}')
     except OSError as e:
-        return {
-            'success': False,
-            'error': f'系统错误: {str(e)}'
-        }
+        return _error_result('OS_ERROR', f'系统错误: {str(e)}')
     except Exception as e:
-        return {
-            'success': False,
-            'error': f'转换错误 ({type(e).__name__}): {str(e)}'
-        }
+        return _error_result('CONVERSION_ERROR', f'转换错误 ({type(e).__name__}): {str(e)}')
 
 def batch_convert(directory, recursive=True, extract_images=True, output_dir=None):
     """
@@ -2849,26 +2825,29 @@ def batch_convert(directory, recursive=True, extract_images=True, output_dir=Non
     if not os.path.exists(normalized_directory):
         return [{
             'file': normalized_directory,
-            'result': {
-                'success': False,
-                'error': f'目录不存在: {normalized_directory}'
-            }
+            'result': _error_result('FILE_NOT_FOUND', f'目录不存在: {normalized_directory}')
         }]
     if not os.path.isdir(normalized_directory):
         return [{
             'file': normalized_directory,
-            'result': {
-                'success': False,
-                'error': f'输入路径不是目录: {normalized_directory}'
-            }
+            'result': _error_result('NOT_A_DIRECTORY', f'输入路径不是目录: {normalized_directory}')
         }]
 
+    normalized_output_dir = None
+    if output_dir:
+        normalized_output_dir = os.path.abspath(os.path.normpath(os.path.expanduser(str(output_dir))))
+
     for file_path in _iter_batch_input_files(normalized_directory, recursive=recursive, output_dir=output_dir):
-        result = convert_document(file_path, extract_images, output_dir)
+        file_output_dir = normalized_output_dir
+        if normalized_output_dir and recursive:
+            relative_parent = os.path.relpath(os.path.dirname(file_path), normalized_directory)
+            if relative_parent != '.':
+                file_output_dir = os.path.join(normalized_output_dir, relative_parent)
+
+        result = convert_document(file_path, extract_images, file_output_dir)
         results.append({
             'file': file_path,
             'result': result
         })
 
     return results
-
