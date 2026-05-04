@@ -34,7 +34,15 @@ The CLI prints JSON to stdout by default. Dependency installation and progress l
 If `bdc` is not installed, install the package first:
 
 ```bash
-python -m pip install bruce-doc-converter
+pipx install bruce-doc-converter
+```
+
+If `pipx` is not available:
+
+```bash
+python3 -m pip install bruce-doc-converter
+# On Homebrew Python (macOS), add --break-system-packages or use a venv:
+# python3 -m venv .venv && .venv/bin/pip install bruce-doc-converter
 ```
 
 ## Output handling

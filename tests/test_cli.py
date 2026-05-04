@@ -37,6 +37,30 @@ class CliTests(unittest.TestCase):
         self.assertFalse(payload["success"])
         self.assertEqual("USAGE_ERROR", payload["error_code"])
 
+    def test_argparse_missing_positional_outputs_json(self):
+        result = self.run_cli("convert")
+
+        self.assertEqual(1, result.returncode)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["success"])
+        self.assertEqual("USAGE_ERROR", payload["error_code"])
+
+    def test_argparse_invalid_choice_outputs_json(self):
+        result = self.run_cli("convert", "file.docx", "--extract-images", "maybe")
+
+        self.assertEqual(1, result.returncode)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["success"])
+        self.assertEqual("USAGE_ERROR", payload["error_code"])
+
+    def test_dash_h_outputs_json(self):
+        result = self.run_cli("-h")
+
+        self.assertEqual(1, result.returncode)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["success"])
+        self.assertEqual("USAGE_ERROR", payload["error_code"])
+
 
 class CliConvertTests(unittest.TestCase):
     def run_cli(self, *args):
@@ -81,6 +105,21 @@ class CliConvertTests(unittest.TestCase):
             self.assertFalse(payload["success"])
             self.assertEqual("FILE_NOT_FOUND", payload["error_code"])
             self.assertEqual(str(missing.resolve()), payload["input_path"])
+
+    def test_convert_output_path_is_absolute_with_relative_output_dir(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "sample.docx"
+            doc = Document()
+            doc.add_paragraph("正文")
+            doc.save(input_path)
+
+            result = self.run_cli("convert", str(input_path), "--output-dir", "relative_out")
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["success"])
+            self.assertTrue(Path(payload["output_path"]).is_absolute(), payload["output_path"])
 
     def test_batch_outputs_protocol_v1(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

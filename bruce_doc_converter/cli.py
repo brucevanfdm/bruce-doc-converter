@@ -19,6 +19,23 @@ def _emit(payload, exit_code):
     return exit_code
 
 
+def _usage_error(message):
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "success": False,
+        "error_code": "USAGE_ERROR",
+        "error": message,
+    }
+
+
+class _JsonArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser that emits JSON on error instead of human-readable text."""
+
+    def error(self, message):
+        _emit(_usage_error(message), 0)
+        sys.exit(1)
+
+
 def _format_of(path):
     ext = os.path.splitext(str(path))[1].lower()
     return ext[1:] if ext.startswith(".") else ext
@@ -64,13 +81,15 @@ def _normalize_single_result(input_path, result):
     input_format = _format_of(normalized_input)
 
     if result.get("success"):
+        raw_output = result.get("output_path")
+        output_path = os.path.realpath(raw_output) if raw_output else None
         payload = {
             "schema_version": SCHEMA_VERSION,
             "success": True,
             "input_path": normalized_input,
             "input_format": input_format,
             "output_format": _output_format(input_format),
-            "output_path": result.get("output_path"),
+            "output_path": output_path,
             "warnings": [],
         }
         if input_format == "md":
@@ -110,30 +129,24 @@ def _help_payload():
 
 
 def _build_parser():
-    parser = argparse.ArgumentParser(prog="bdc", add_help=True)
+    # add_help=False: -h would print human text, breaking the JSON-only stdout contract.
+    # Use --help-json for machine-readable help instead.
+    parser = _JsonArgumentParser(prog="bdc", add_help=False)
     parser.add_argument("--help-json", action="store_true")
     subparsers = parser.add_subparsers(dest="command")
 
-    convert_parser = subparsers.add_parser("convert")
+    # Subparsers inherit _JsonArgumentParser because type(parser) is _JsonArgumentParser
+    convert_parser = subparsers.add_parser("convert", add_help=False)
     convert_parser.add_argument("file")
     convert_parser.add_argument("--output-dir")
     convert_parser.add_argument("--extract-images", choices=["true", "false"], default="true")
 
-    batch_parser = subparsers.add_parser("batch")
+    batch_parser = subparsers.add_parser("batch", add_help=False)
     batch_parser.add_argument("directory")
     batch_parser.add_argument("--output-dir")
     batch_parser.add_argument("--recursive", choices=["true", "false"], default="true")
     batch_parser.add_argument("--extract-images", choices=["true", "false"], default="true")
     return parser
-
-
-def _usage_error(message):
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "success": False,
-        "error_code": "USAGE_ERROR",
-        "error": message,
-    }
 
 
 def main(argv=None):
@@ -148,20 +161,22 @@ def main(argv=None):
         return _emit(_help_payload(), 0)
 
     if namespace.command == "convert":
+        output_dir = os.path.realpath(os.path.expanduser(namespace.output_dir)) if namespace.output_dir else None
         result = convert_document(
             namespace.file,
             extract_images=namespace.extract_images == "true",
-            output_dir=namespace.output_dir,
+            output_dir=output_dir,
         )
         payload = _normalize_single_result(namespace.file, result)
         return _emit(payload, 0 if payload["success"] else 1)
 
     if namespace.command == "batch":
+        output_dir = os.path.realpath(os.path.expanduser(namespace.output_dir)) if namespace.output_dir else None
         raw_results = batch_convert(
             namespace.directory,
             recursive=namespace.recursive == "true",
             extract_images=namespace.extract_images == "true",
-            output_dir=namespace.output_dir,
+            output_dir=output_dir,
         )
         results = [
             {

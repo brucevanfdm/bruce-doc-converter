@@ -14,7 +14,15 @@
 ## Installation
 
 ```bash
-python -m pip install bruce-doc-converter
+pipx install bruce-doc-converter
+```
+
+If `pipx` is not available:
+
+```bash
+python3 -m pip install bruce-doc-converter
+# On Homebrew Python (macOS), add --break-system-packages or use a venv:
+# python3 -m venv .venv && .venv/bin/pip install bruce-doc-converter
 ```
 
 ## Agent CLI Usage
