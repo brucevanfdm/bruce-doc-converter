@@ -13,7 +13,7 @@ from pptx.enum.chart import XL_CHART_TYPE
 from pptx import Presentation
 from pptx.util import Inches
 
-from scripts.convert_document import (
+from bruce_doc_converter.converter import (
     _detect_image_format,
     _extract_pdf_page_blocks,
     _get_image_dimensions,
@@ -451,8 +451,8 @@ class ConvertDocumentTests(unittest.TestCase):
             pdf_path = tmp_path / "empty.pdf"
             pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
 
-            with patch("scripts.convert_document.check_dependencies", return_value=(True, None)):
-                with patch("scripts.convert_document.convert_pdf", return_value=""):
+            with patch("bruce_doc_converter.converter.check_dependencies", return_value=(True, None)):
+                with patch("bruce_doc_converter.converter.convert_pdf", return_value=""):
                     result = convert_document(str(pdf_path))
 
             self.assertFalse(result["success"])
@@ -473,7 +473,7 @@ class ConvertDocumentTests(unittest.TestCase):
                 seen.append(Path(path).relative_to(root).as_posix())
                 return {"success": True}
 
-            with patch("scripts.convert_document.convert_document", side_effect=_fake_convert):
+            with patch("bruce_doc_converter.converter.convert_document", side_effect=_fake_convert):
                 results = batch_convert(str(root), recursive=True)
 
             self.assertEqual(["source.docx"], seen)
