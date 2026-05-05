@@ -28,6 +28,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 package-lock.json
+!bruce_doc_converter/md_to_docx/package-lock.json
 
 # 输出目录
 Markdown/
