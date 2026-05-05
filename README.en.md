@@ -17,12 +17,11 @@
 pipx install bruce-doc-converter
 ```
 
-If `pipx` is not available:
+If `pipx` is not available, use a virtual environment:
 
 ```bash
-python3 -m pip install bruce-doc-converter
-# On Homebrew Python (macOS), add --break-system-packages or use a venv:
-# python3 -m venv .venv && .venv/bin/pip install bruce-doc-converter
+python3 -m venv .venv
+.venv/bin/pip install bruce-doc-converter
 ```
 
 ## Agent CLI Usage
@@ -33,7 +32,21 @@ bdc convert /path/to/notes.md
 bdc batch /path/to/documents
 ```
 
-The CLI writes JSON to stdout by default. Progress and dependency installation logs go to stderr.
+The CLI writes JSON to stdout by default. Progress logs go to stderr.
+
+Markdown to Word requires Node.js dependencies. Initialize them explicitly before first use:
+
+```bash
+bdc setup-node
+```
+
+By default this runs `npm ci --ignore-scripts` against the locked dependency set, avoiding third-party npm lifecycle scripts. If your Mermaid rendering environment needs npm lifecycle scripts to download browser dependencies, use:
+
+```bash
+bdc setup-node --allow-scripts
+```
+
+`bdc setup-node` is idempotent: if the shared dependency directory already matches the installed package, it returns success and skips installation. Recoverable failures include `retryable` and `next_command` JSON fields; agents should prefer those machine-readable fields for remediation.
 
 Get help:
 
@@ -135,11 +148,13 @@ Current limit is 100 MB. Consider splitting the file or reducing content.
 
 ### Markdown → Word failing?
 
-Node.js is required. If Node.js is installed but conversion still fails, check the npm dependencies:
+Node.js is required, and the Node.js dependencies must be installed explicitly:
 
 ```bash
-npm --prefix bruce_doc_converter/md_to_docx install
+bdc setup-node
 ```
+
+On Linux, Chromium is not launched with `--no-sandbox` by default. If you understand the risk and your environment requires it, set `BRUCE_DOC_CONVERTER_ALLOW_CHROMIUM_NO_SANDBOX=1` before conversion.
 
 ### PDF returns no content?
 

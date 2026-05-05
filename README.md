@@ -17,12 +17,11 @@
 pipx install bruce-doc-converter
 ```
 
-如果 `pipx` 不可用：
+如果 `pipx` 不可用，建议使用虚拟环境：
 
 ```bash
-python3 -m pip install bruce-doc-converter
-# macOS Homebrew Python 需要加 --break-system-packages 或使用 venv：
-# python3 -m venv .venv && .venv/bin/pip install bruce-doc-converter
+python3 -m venv .venv
+.venv/bin/pip install bruce-doc-converter
 ```
 
 ## Agent CLI 用法
@@ -33,7 +32,21 @@ bdc convert /path/to/notes.md
 bdc batch /path/to/documents
 ```
 
-CLI 默认向 stdout 输出 JSON，stderr 仅用于进度和依赖安装日志。
+CLI 默认向 stdout 输出 JSON，stderr 仅用于进度日志。
+
+Markdown 转 Word 需要 Node.js 依赖。首次使用前请显式初始化：
+
+```bash
+bdc setup-node
+```
+
+默认初始化会使用 `npm ci --ignore-scripts` 安装锁定依赖，避免运行第三方 npm 生命周期脚本。如果你的 Mermaid 渲染环境确实需要 npm 生命周期脚本下载浏览器依赖，可改用：
+
+```bash
+bdc setup-node --allow-scripts
+```
+
+`bdc setup-node` 是幂等命令：如果共享依赖目录已经和当前发布包匹配，会直接返回成功并跳过安装。可恢复失败会在 JSON 中提供 `retryable` 和 `next_command` 字段，智能体应优先使用这些机器字段决定下一步。
 
 查看帮助：
 
@@ -135,11 +148,13 @@ bdc --help-json
 
 ### Markdown 转 Word 失败？
 
-需要安装 Node.js。如果 Node.js 已安装但仍报错，检查依赖：
+需要安装 Node.js，并先显式安装 Node.js 依赖：
 
 ```bash
-npm --prefix bruce_doc_converter/md_to_docx install
+bdc setup-node
 ```
+
+Linux 下默认不会为 Chromium 传入 `--no-sandbox`。如果你理解风险且运行环境确实需要，可设置 `BRUCE_DOC_CONVERTER_ALLOW_CHROMIUM_NO_SANDBOX=1` 后再转换。
 
 ### PDF 提取不到内容？
 

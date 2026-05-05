@@ -3,14 +3,28 @@ import json
 import os
 import sys
 
-from bruce_doc_converter.converter import SUPPORTED_EXTENSIONS, batch_convert, convert_document
+from bruce_doc_converter.converter import (
+    SUPPORTED_EXTENSIONS,
+    batch_convert,
+    convert_document,
+    setup_node_dependencies,
+)
 
 SCHEMA_VERSION = "1.0"
 
 SUGGESTIONS = {
     "UNSUPPORTED_FORMAT": "请先转换为 .docx/.xlsx/.pptx 后再重试。",
     "NODE_NOT_FOUND": "请安装 Node.js 后重试 Markdown 到 Word 转换。",
+    "DEPENDENCY_INSTALL_REQUIRED": "请先运行 bdc setup-node 安装 Markdown 到 Word 所需的 Node.js 依赖。",
     "EMPTY_PDF_CONTENT": "请先对扫描件执行 OCR，或解除 PDF 保护后重试。",
+}
+
+NEXT_COMMANDS = {
+    "DEPENDENCY_INSTALL_REQUIRED": "bdc setup-node",
+}
+
+RETRYABLE_ERRORS = {
+    "DEPENDENCY_INSTALL_REQUIRED",
 }
 
 
@@ -25,6 +39,7 @@ def _usage_error(message):
         "success": False,
         "error_code": "USAGE_ERROR",
         "error": message,
+        "retryable": False,
     }
 
 
@@ -61,6 +76,8 @@ def _classify_error(error):
         return "UNSUPPORTED_FORMAT"
     if "未找到 Node.js" in text:
         return "NODE_NOT_FOUND"
+    if "需要先显式安装 Node.js 依赖" in text:
+        return "DEPENDENCY_INSTALL_REQUIRED"
     if "Node.js 依赖安装失败" in text or "依赖安装失败" in text:
         return "DEPENDENCY_INSTALL_FAILED"
     if "Node.js 脚本输出解析失败" in text or "调用 Node.js 脚本失败" in text:
@@ -112,9 +129,12 @@ def _normalize_single_result(input_path, result):
         "input_format": input_format,
         "error_code": error_code,
         "error": error,
+        "retryable": error_code in RETRYABLE_ERRORS,
     }
     if error_code in SUGGESTIONS:
         payload["suggestion"] = SUGGESTIONS[error_code]
+    if error_code in NEXT_COMMANDS:
+        payload["next_command"] = NEXT_COMMANDS[error_code]
     return payload
 
 
@@ -125,6 +145,7 @@ def _help_payload():
         "commands": {
             "convert": "Convert one .docx/.xlsx/.pptx/.pdf file to Markdown, or one .md file to DOCX.",
             "batch": "Convert supported files in a directory.",
+            "setup-node": "Install Node.js dependencies required for Markdown to DOCX conversion.",
         },
         "supported_extensions": SUPPORTED_EXTENSIONS,
     }
@@ -148,13 +169,16 @@ def _build_parser():
     batch_parser.add_argument("--output-dir")
     batch_parser.add_argument("--recursive", choices=["true", "false"], default="true")
     batch_parser.add_argument("--extract-images", choices=["true", "false"], default="true")
+
+    setup_node_parser = subparsers.add_parser("setup-node", add_help=False)
+    setup_node_parser.add_argument("--allow-scripts", action="store_true")
     return parser
 
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
-        return _emit(_usage_error("缺少命令。可用命令: convert, batch"), 1)
+        return _emit(_usage_error("缺少命令。可用命令: convert, batch, setup-node"), 1)
 
     parser = _build_parser()
     namespace = parser.parse_args(args)
@@ -199,7 +223,14 @@ def main(argv=None):
         }
         return _emit(payload, 0 if payload["success"] else 1)
 
-    return _emit(_usage_error("缺少命令。可用命令: convert, batch"), 1)
+    if namespace.command == "setup-node":
+        payload = setup_node_dependencies(allow_scripts=namespace.allow_scripts)
+        payload = {"schema_version": SCHEMA_VERSION, **payload}
+        if not payload["success"]:
+            payload.setdefault("retryable", False)
+        return _emit(payload, 0 if payload["success"] else 1)
+
+    return _emit(_usage_error("缺少命令。可用命令: convert, batch, setup-node"), 1)
 
 
 if __name__ == "__main__":

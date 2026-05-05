@@ -71,7 +71,7 @@ async function renderMermaidToDataUrl(mermaidCode) {
     if (result.errorCode === 'ENOENT') {
       return {
         success: false,
-        error: '未找到 mmdc 可执行文件，请在 scripts/md_to_docx 目录执行 npm install'
+        error: '未找到 mmdc 可执行文件，请先运行 bdc setup-node'
       };
     }
 
@@ -179,10 +179,15 @@ function resolveSharedNodeRoot() {
 }
 
 function buildPuppeteerConfig() {
-  if (process.platform === 'linux') {
+  if (process.platform === 'linux' && isNoSandboxExplicitlyAllowed()) {
     return { args: LINUX_PUPPETEER_ARGS };
   }
   return {};
+}
+
+function isNoSandboxExplicitlyAllowed() {
+  const value = (process.env.BRUCE_DOC_CONVERTER_ALLOW_CHROMIUM_NO_SANDBOX || '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
 }
 
 function runCommand(command, args, cwd, timeoutMs) {

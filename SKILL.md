@@ -29,7 +29,13 @@ For batch conversion:
 bdc batch "<directory>"
 ```
 
-The CLI prints JSON to stdout by default. Dependency installation and progress logs may appear on stderr.
+For Markdown to Word, initialize the Node.js dependencies explicitly before first use:
+
+```bash
+bdc setup-node
+```
+
+The CLI prints JSON to stdout by default. Progress logs may appear on stderr.
 
 If `bdc` is not installed, install the package first:
 
@@ -37,12 +43,11 @@ If `bdc` is not installed, install the package first:
 pipx install bruce-doc-converter
 ```
 
-If `pipx` is not available:
+If `pipx` is not available, use a virtual environment:
 
 ```bash
-python3 -m pip install bruce-doc-converter
-# On Homebrew Python (macOS), add --break-system-packages or use a venv:
-# python3 -m venv .venv && .venv/bin/pip install bruce-doc-converter
+python3 -m venv .venv
+.venv/bin/pip install bruce-doc-converter
 ```
 
 ## Output handling
@@ -59,8 +64,10 @@ On success:
 On failure:
 
 - `success` is `false`.
-- Use `error_code`, `error`, and optional `suggestion` to decide the next step.
-- Do not pre-check Python or Node dependencies. Run the command first and react to JSON failure.
+- Use `error_code`, `retryable`, optional `next_command`, `error`, and optional `suggestion` to decide the next step.
+- Do not pre-check Python dependencies. Run the command first and react to JSON failure.
+- If Markdown to Word returns `DEPENDENCY_INSTALL_REQUIRED`, run `next_command` when present, otherwise run `bdc setup-node`, then retry.
+- `bdc setup-node` is idempotent and may return `already_installed: true` with `install_action: "skipped"`.
 
 ## Supported formats
 

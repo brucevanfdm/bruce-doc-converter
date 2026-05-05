@@ -29,6 +29,7 @@ import xml.etree.ElementTree as ET
 SUPPORTED_EXTENSIONS = ['.docx', '.xlsx', '.pptx', '.pdf', '.md']
 MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024
 NODE_CONVERT_TIMEOUT_SECONDS = 120
+NODE_INSTALL_TIMEOUT_SECONDS = 300
 NODE_SHARED_HOME_ENV = "BRUCE_DOC_CONVERTER_NODE_HOME"
 GENERATED_OUTPUT_DIR_NAMES = {"Markdown", "Word"}
 DOCX_XML_NAMESPACES = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
@@ -178,7 +179,7 @@ def _sync_shared_package_files(source_dir, target_dir):
             return False, f"无法复制 {filename} 到共享目录: {str(e)}"
     return True, None
 
-def _ensure_shared_node_modules(shared_dir, source_dir):
+def _ensure_shared_node_modules(shared_dir, source_dir, allow_scripts=False):
     npm_cmd = shutil.which('npm')
     if not npm_cmd:
         return False, "未找到 npm。请安装 Node.js（自带 npm）后重试。"
@@ -192,7 +193,10 @@ def _ensure_shared_node_modules(shared_dir, source_dir):
     if not ok:
         return False, err
 
-    cmd = [npm_cmd, "install", "--no-fund", "--no-audit"]
+    install_action = "ci" if os.path.exists(os.path.join(shared_dir, "package-lock.json")) else "install"
+    cmd = [npm_cmd, install_action, "--no-fund", "--no-audit"]
+    if not allow_scripts:
+        cmd.append("--ignore-scripts")
     try:
         print("[BruceDocConverter] 正在安装 Node.js 依赖到用户共享目录...", file=sys.stderr)
         result = subprocess.run(
@@ -203,10 +207,13 @@ def _ensure_shared_node_modules(shared_dir, source_dir):
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=NODE_INSTALL_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
             error_output = result.stderr.strip() or result.stdout.strip()
             return False, f"Node.js 依赖安装失败: {error_output}"
+    except subprocess.TimeoutExpired:
+        return False, f"Node.js 依赖安装超时（超过{NODE_INSTALL_TIMEOUT_SECONDS}秒）"
     except Exception as e:
         return False, f"Node.js 依赖安装失败: {str(e)}"
 
@@ -222,97 +229,43 @@ def _find_mmdc_binary(node_modules_dir):
         return candidate
     return None
 
-# ==================== 依赖安装函数 ====================
+def _files_have_same_content(left, right):
+    if not os.path.exists(left) or not os.path.exists(right):
+        return False
+    try:
+        with open(left, "rb") as left_file, open(right, "rb") as right_file:
+            return left_file.read() == right_file.read()
+    except Exception:
+        return False
 
-def install_dependencies(pip_packages):
-    """
-    自动安装缺失的依赖到用户目录（使用 --user 标志）
+def _shared_node_dependencies_ready(shared_dir, source_dir):
+    for filename in ("package.json", "package-lock.json"):
+        if not _files_have_same_content(
+            os.path.join(source_dir, filename),
+            os.path.join(shared_dir, filename),
+        ):
+            return False
 
-    使用 --user 安装的好处：
-    - 不受 PEP 668 系统保护限制（适用于 macOS 从系统 Python 安装）
-    - 无需虚拟环境
-    - 安装到 ~/.local/ (Linux/macOS) 或 %APPDATA% (Windows)
-    - 所有项目共享
-
-    Args:
-        pip_packages: 要安装的包名列表
-
-    Returns:
-        (success: bool, error_message: str or None)
-    """
-    if not pip_packages:
-        return True, None
-
-    # 获取当前 Python 可执行文件路径
-    python_exe = sys.executable or 'python'
-
-    # 构建安装命令
-    # 首先尝试 --user 安装到用户目录，避免 PEP 668 限制
-    # 如果失败，回退到 --break-system-packages（适用于使用系统 Python 的情况）
-    install_methods = [
-        ('--user', '用户目录'),
-        ('--break-system-packages', '系统目录（绕过 PEP 668 保护）'),
+    node_modules_dir = os.path.join(shared_dir, "node_modules")
+    required_paths = [
+        os.path.join(node_modules_dir, "docx"),
+        os.path.join(node_modules_dir, "jsdom"),
+        os.path.join(node_modules_dir, "@mermaid-js", "mermaid-cli"),
     ]
+    if any(not os.path.exists(path) for path in required_paths):
+        return False
 
-    for install_flag, location_desc in install_methods:
-        cmd = [python_exe, '-m', 'pip', 'install', install_flag] + pip_packages
-
-        try:
-            # 显示安装提示（仅在首次安装时）
-            print(f"[BruceDocConverter] 正在安装缺失的依赖: {', '.join(pip_packages)}", file=sys.stderr)
-            print(f"[BruceDocConverter] 安装位置: {location_desc}", file=sys.stderr)
-
-            # 运行安装命令
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-
-            if result.returncode == 0:
-                print(f"[BruceDocConverter] 依赖安装成功！", file=sys.stderr)
-                return True, None
-
-            # 检查错误类型，决定是否尝试下一种方法
-            error_output = result.stderr.strip() or result.stdout.strip()
-
-            # 如果是 PEP 668 相关错误，尝试下一种方法
-            if 'externally-managed-environment' in error_output or 'PEP 668' in error_output:
-                continue
-
-            # 其他错误不再重试
-            # 检查是否是权限问题
-            if "Permission denied" in error_output or "Access denied" in error_output:
-                return False, f"权限不足。请尝试: pip install {install_flag} {' '.join(pip_packages)}"
-
-            # 检查是否是 pip 不存在
-            if "No module named pip" in error_output:
-                return False, "pip 未安装。请先安装 pip: python -m ensurepip --upgrade"
-
-            # 其他错误
-            return False, f"依赖安装失败: {error_output}"
-
-        except FileNotFoundError:
-            return False, f"找不到 Python 解释器: {python_exe}"
-        except Exception as e:
-            return False, f"依赖安装时发生错误: {str(e)}"
-
-    # 所有方法都失败
-    return False, "依赖安装失败：所有安装方法都失败（包括 --user 和 --break-system-packages）"
-
+    return _find_mmdc_binary(node_modules_dir) is not None
 
 # ==================== 依赖检查函数 ====================
 
-def check_dependencies(file_ext=None, auto_install=True):
+def check_dependencies(file_ext=None, auto_install=False):
     """
     检查必需的依赖是否已安装（默认检查全部；传入 file_ext 时仅检查该格式所需）
 
     Args:
         file_ext: 文件扩展名（如 '.docx'），仅检查该格式所需的依赖
-        auto_install: 是否自动安装缺失的依赖（默认 True）
+        auto_install: 保留的兼容参数。发布包不会在运行时自动安装 Python 依赖。
 
     Returns:
         (success: bool, error_message: str or None)
@@ -342,29 +295,11 @@ def check_dependencies(file_ext=None, auto_install=True):
             missing.append(module_name)
             missing_pip_names.append(pip_name)
 
-    # 如果有缺失依赖且启用了自动安装
-    if missing and auto_install:
-        success, error = install_dependencies(missing_pip_names)
-        if success:
-            # 安装成功，重新检查
-            still_missing = []
-            for module_name, pip_name in deps:
-                try:
-                    importlib.import_module(module_name)
-                except ImportError:
-                    still_missing.append(pip_name)
-
-            if still_missing:
-                return False, f"依赖安装后仍无法加载: {', '.join(still_missing)}。请手动安装并检查 Python 环境。"
-
-            return True, None
-        else:
-            # 安装失败
-            return False, error
-
-    # 有缺失但未启用自动安装
     if missing:
-        return False, f"缺少依赖库: {', '.join(missing_pip_names)}。请运行: pip install --user {' '.join(missing_pip_names)}"
+        return False, (
+            f"缺少依赖库: {', '.join(missing_pip_names)}。"
+            "请重新安装发布包以恢复依赖: pipx reinstall bruce-doc-converter"
+        )
 
     return True, None
 
@@ -512,8 +447,23 @@ def _resolve_markdown_output_path(file_path, output_dir=None):
         raise NotADirectoryError(f'输出路径不是目录: {target_dir}')
 
     os.makedirs(target_dir, exist_ok=True)
-    output_filename = os.path.splitext(os.path.basename(file_path))[0] + '.md'
-    return os.path.join(target_dir, output_filename)
+    base_name, source_ext = os.path.splitext(os.path.basename(file_path))
+    output_filename = base_name + '.md'
+    output_path = os.path.join(target_dir, output_filename)
+    if not os.path.exists(output_path):
+        return output_path
+
+    source_suffix = source_ext.lower() or ".input"
+    output_path = os.path.join(target_dir, f"{base_name}{source_suffix}.md")
+    if not os.path.exists(output_path):
+        return output_path
+
+    counter = 2
+    while True:
+        output_path = os.path.join(target_dir, f"{base_name}{source_suffix}.{counter}.md")
+        if not os.path.exists(output_path):
+            return output_path
+        counter += 1
 
 def _iter_batch_input_files(directory, recursive=True, output_dir=None):
     """遍历批量转换输入文件，跳过已生成输出目录，避免重复处理"""
@@ -2609,7 +2559,7 @@ def convert_md(file_path, output_dir=None):
     if not os.path.exists(node_script):
         return _error_result(
             'NODE_CONVERSION_FAILED',
-            f'Node.js 转换脚本不存在: {node_script}。请运行 npm install 安装依赖。'
+            f'Node.js 转换脚本不存在: {node_script}。请重新安装发布包: pipx reinstall bruce-doc-converter'
         )
 
     source_dir = os.path.join(script_dir, 'md_to_docx')
@@ -2624,19 +2574,13 @@ def convert_md(file_path, output_dir=None):
     use_shared = False
     need_shared = (not os.path.exists(local_node_modules)) or (local_mmdc is None)
     if need_shared and shared_mmdc is None:
-        ok, err = _ensure_shared_node_modules(shared_dir, source_dir)
-        if not ok:
-            return _error_result(
-                'DEPENDENCY_INSTALL_FAILED',
-                (
-                    f"{err}\n"
-                    f"可手动安装：\n"
-                    f"  1) 本地安装：cd {source_dir} && npm install\n"
-                    f"  2) 共享安装：cd {shared_dir} && npm install\n"
-                    f"可通过环境变量 {NODE_SHARED_HOME_ENV} 指定共享目录。"
-                )
+        return _error_result(
+            'DEPENDENCY_INSTALL_REQUIRED',
+            (
+                "Markdown 转 Word 需要先显式安装 Node.js 依赖。"
+                "请运行: bdc setup-node"
             )
-        shared_mmdc = _find_mmdc_binary(shared_node_modules)
+        )
 
     if need_shared and shared_mmdc:
         use_shared = True
@@ -2696,6 +2640,31 @@ def convert_md(file_path, output_dir=None):
         return _error_result('CONVERSION_TIMEOUT', '转换超时（超过2分钟）')
     except Exception as e:
         return _error_result('NODE_CONVERSION_FAILED', f'调用 Node.js 脚本失败: {str(e)}')
+
+def setup_node_dependencies(allow_scripts=False):
+    """显式安装 Markdown -> DOCX 所需的 Node.js 依赖到用户共享目录。"""
+    source_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'md_to_docx')
+    shared_root = _get_node_shared_root()
+    shared_dir = os.path.join(shared_root, 'md_to_docx')
+    if _shared_node_dependencies_ready(shared_dir, source_dir):
+        return {
+            'success': True,
+            'node_home': shared_dir,
+            'allow_scripts': bool(allow_scripts),
+            'already_installed': True,
+            'install_action': 'skipped',
+        }
+
+    ok, err = _ensure_shared_node_modules(shared_dir, source_dir, allow_scripts=allow_scripts)
+    if not ok:
+        return _error_result('DEPENDENCY_INSTALL_FAILED', err)
+    return {
+        'success': True,
+        'node_home': shared_dir,
+        'allow_scripts': bool(allow_scripts),
+        'already_installed': False,
+        'install_action': 'installed',
+    }
 
 def convert_document(file_path, extract_images=True, output_dir=None):
     """

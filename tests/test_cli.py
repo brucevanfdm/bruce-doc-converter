@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -35,6 +37,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual("1.0", payload["schema_version"])
         self.assertIn("convert", payload["commands"])
         self.assertIn("batch", payload["commands"])
+        self.assertIn("setup-node", payload["commands"])
 
     def test_missing_command_outputs_json_failure(self):
         result = self.run_cli()
@@ -78,6 +81,18 @@ class CliTests(unittest.TestCase):
         self.assertEqual(1, raised.exception.code)
         self.assertEqual(1, emit.call_args.args[1])
 
+    def test_setup_node_command_outputs_protocol_result(self):
+        with patch("bruce_doc_converter.cli.setup_node_dependencies", return_value={"success": True, "node_home": "/tmp/node"}):
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli.main(["setup-node"])
+
+        self.assertEqual(0, exit_code)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual("1.0", payload["schema_version"])
+        self.assertTrue(payload["success"])
+        self.assertEqual("/tmp/node", payload["node_home"])
+
     def test_normalize_result_uses_structured_error_code(self):
         payload = cli._normalize_single_result(
             "/tmp/input.docx",
@@ -93,6 +108,20 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertEqual("unknown", payload["input_format"])
+
+    def test_dependency_install_required_includes_agent_next_step(self):
+        payload = cli._normalize_single_result(
+            "/tmp/input.md",
+            {
+                "success": False,
+                "error_code": "DEPENDENCY_INSTALL_REQUIRED",
+                "error": "Markdown 转 Word 需要先显式安装 Node.js 依赖。请运行: bdc setup-node",
+            },
+        )
+
+        self.assertFalse(payload["success"])
+        self.assertTrue(payload["retryable"])
+        self.assertEqual("bdc setup-node", payload["next_command"])
 
 
 class CliConvertTests(unittest.TestCase):

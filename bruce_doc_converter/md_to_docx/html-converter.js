@@ -400,35 +400,36 @@ function parseDataImage(src) {
 function parseLocalImage(src) {
   if (/^https?:\/\//i.test(src)) return null;
   if (src.startsWith('data:')) return null;
+  if (src.startsWith('file://')) return null;
+  if (!_basePath) return null;
 
   let localPath = src;
-
-  if (src.startsWith('file://')) {
-    try {
-      const fileUrl = new URL(src);
-      // 处理 file://C:/path 格式（两个斜杠，Windows 盘符被误识别为 hostname）
-      if (process.platform === 'win32' && /^[a-zA-Z]$/.test(fileUrl.hostname)) {
-        localPath = safeDecodeURIComponent(fileUrl.hostname + ':' + fileUrl.pathname);
-      } else {
-        localPath = safeDecodeURIComponent(fileUrl.pathname);
-        if (process.platform === 'win32' && localPath.startsWith('/')) {
-          localPath = localPath.slice(1);
-        }
-      }
-    } catch (error) {
-      return null;
-    }
-  }
 
   let decodedPath = safeDecodeURIComponent(localPath);
   // 处理 /C:/path 格式（前导斜杠 + Windows 盘符）
   if (process.platform === 'win32' && /^\/[a-zA-Z]:[\\/]/.test(decodedPath)) {
     decodedPath = decodedPath.slice(1);
   }
-  const resolvedPath = (_basePath && !path.isAbsolute(decodedPath))
-    ? path.resolve(_basePath, decodedPath)
-    : path.resolve(decodedPath);
+
+  if (path.isAbsolute(decodedPath)) {
+    return null;
+  }
+
+  const resolvedPath = path.resolve(_basePath, decodedPath);
   if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
+    return null;
+  }
+
+  let baseRealPath;
+  let imageRealPath;
+  try {
+    baseRealPath = fs.realpathSync(_basePath);
+    imageRealPath = fs.realpathSync(resolvedPath);
+  } catch (error) {
+    return null;
+  }
+
+  if (!isPathInside(imageRealPath, baseRealPath)) {
     return null;
   }
 
@@ -519,6 +520,11 @@ function safeDecodeURIComponent(value) {
   } catch (error) {
     return value;
   }
+}
+
+function isPathInside(childPath, parentPath) {
+  const relative = path.relative(parentPath, childPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 function mergeInlineOptions(baseOptions = {}, nextOptions = {}) {

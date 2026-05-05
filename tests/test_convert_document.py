@@ -1,4 +1,5 @@
 import base64
+import shutil
 import tempfile
 import unittest
 from datetime import date
@@ -21,7 +22,10 @@ from bruce_doc_converter.converter import (
     _postprocess_pdf_academic_sections,
     _render_docx_list_marker,
     batch_convert,
+    check_dependencies,
     convert_document,
+    convert_md,
+    setup_node_dependencies,
 )
 
 
@@ -457,6 +461,75 @@ class ConvertDocumentTests(unittest.TestCase):
 
             self.assertFalse(result["success"])
             self.assertIn("PDF 未提取到任何文本或表格", result["error"])
+
+    def test_same_basename_different_formats_do_not_overwrite_markdown_output(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            output_dir = tmp_path / "out"
+            pdf_path = tmp_path / "same.pdf"
+            pptx_path = tmp_path / "same.pptx"
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+            pptx_path.write_bytes(b"pptx")
+
+            with patch("bruce_doc_converter.converter.check_dependencies", return_value=(True, None)):
+                with patch("bruce_doc_converter.converter.convert_pdf", return_value="PDF content"):
+                    pdf_result = convert_document(str(pdf_path), output_dir=str(output_dir))
+                with patch("bruce_doc_converter.converter.convert_pptx", return_value=("PPTX content", [])):
+                    pptx_result = convert_document(str(pptx_path), output_dir=str(output_dir))
+
+            self.assertTrue(pdf_result["success"], pdf_result)
+            self.assertTrue(pptx_result["success"], pptx_result)
+            self.assertNotEqual(pdf_result["output_path"], pptx_result["output_path"])
+            self.assertEqual("PDF content", Path(pdf_result["output_path"]).read_text(encoding="utf-8"))
+            self.assertEqual("PPTX content", Path(pptx_result["output_path"]).read_text(encoding="utf-8"))
+
+    def test_check_dependencies_reports_missing_without_auto_installing(self):
+        with patch("bruce_doc_converter.converter.subprocess.run") as run:
+            with patch("bruce_doc_converter.converter.importlib.import_module", side_effect=ImportError("missing")):
+                success, error = check_dependencies(".docx")
+
+        self.assertFalse(success)
+        self.assertIn("缺少依赖库: python-docx", error)
+        run.assert_not_called()
+
+    def test_convert_md_requires_explicit_node_setup_without_runtime_install(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            md_path = Path(tmp_dir) / "input.md"
+            md_path.write_text("# title", encoding="utf-8")
+
+            def _exists(path):
+                return str(path).endswith("md_to_docx/index.js")
+
+            with patch("bruce_doc_converter.converter.shutil.which", return_value="/usr/bin/node"):
+                with patch("bruce_doc_converter.converter.os.path.exists", side_effect=_exists):
+                    with patch("bruce_doc_converter.converter._ensure_shared_node_modules") as ensure:
+                        result = convert_md(str(md_path), output_dir=tmp_dir)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPENDENCY_INSTALL_REQUIRED", result["error_code"])
+        ensure.assert_not_called()
+
+    def test_setup_node_skips_install_when_shared_dependencies_are_ready(self):
+        source_dir = Path(__file__).resolve().parents[1] / "bruce_doc_converter" / "md_to_docx"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_dir = Path(tmp_dir) / "md_to_docx"
+            bin_dir = shared_dir / "node_modules" / ".bin"
+            bin_dir.mkdir(parents=True)
+            shutil.copy2(source_dir / "package.json", shared_dir / "package.json")
+            shutil.copy2(source_dir / "package-lock.json", shared_dir / "package-lock.json")
+            (bin_dir / "mmdc").write_text("#!/bin/sh\n", encoding="utf-8")
+            (shared_dir / "node_modules" / "docx").mkdir()
+            (shared_dir / "node_modules" / "jsdom").mkdir()
+            (shared_dir / "node_modules" / "@mermaid-js" / "mermaid-cli").mkdir(parents=True)
+
+            with patch("bruce_doc_converter.converter._get_node_shared_root", return_value=tmp_dir):
+                with patch("bruce_doc_converter.converter._ensure_shared_node_modules") as ensure:
+                    result = setup_node_dependencies()
+
+        self.assertTrue(result["success"], result)
+        self.assertTrue(result["already_installed"])
+        self.assertEqual("skipped", result["install_action"])
+        ensure.assert_not_called()
 
     def test_batch_convert_skips_generated_output_directories(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
