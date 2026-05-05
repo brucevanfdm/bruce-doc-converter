@@ -1,0 +1,4 @@
+prune bruce_doc_converter/md_to_docx/node_modules
+prune bruce_doc_converter/md_to_docx/.cache
+
+global-exclude __pycache__ *.py[cod] .DS_Store
