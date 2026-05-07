@@ -170,7 +170,8 @@ Scanned PDFs require OCR first. Protected PDFs must be unlocked before conversio
 
 ```
 bruce-doc-converter/
-├── SKILL.md                      # Agent Skill definition
+├── skills/
+│   └── SKILL.md                  # Agent Skill definition
 ├── pyproject.toml                # Python package metadata
 ├── requirements.txt              # Local development dependencies
 ├── bruce_doc_converter/
@@ -178,8 +179,6 @@ bruce-doc-converter/
 │   ├── cli.py                    # bdc CLI entry point
 │   ├── converter.py              # Core conversion logic
 │   └── md_to_docx/              # Node.js module for Markdown → Word
-├── references/
-│   └── supported-formats.md
 └── tests/
     ├── test_cli.py
     ├── test_convert_document.py
