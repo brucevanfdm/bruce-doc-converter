@@ -4,7 +4,7 @@ description: 双向文档转换工具，将 Word (.docx)、Excel (.xlsx)、Power
 ---
 # Bruce Doc Converter
 
-Agent-facing document converter CLI.
+Agent-facing document converter CLI..
 
 ## When to use
 
@@ -91,20 +91,20 @@ On failure:
 
 ## Troubleshooting installation
 
-| Error | Cause | Fix |
-| --- | --- | --- |
-| `SOCKS support` / proxy connection error | `all_proxy` or `http_proxy` env vars set | Run `unset all_proxy http_proxy https_proxy` (macOS/Linux) or `set all_proxy=` (Windows CMD), then retry |
-| `command not found: pipx` | pipx not installed | Try `uv tool install` or `pip install --user` instead |
-| `externally-managed-environment` | Python 3.11+ system Python forbids global pip | Use `pipx`, `uv tool install`, or the venv fallback |
-| Permission denied | No write access to install location | Add `--user` flag, or use venv fallback |
-| `bdc: command not found` after venv install | venv bin not in PATH | Use full path: `.venv/bin/bdc` (macOS/Linux) or `.venv\Scripts\bdc` (Windows) |
+| Error                                         | Cause                                         | Fix                                                                                                          |
+| --------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `SOCKS support` / proxy connection error    | `all_proxy` or `http_proxy` env vars set  | Run `unset all_proxy http_proxy https_proxy` (macOS/Linux) or `set all_proxy=` (Windows CMD), then retry |
+| `command not found: pipx`                   | pipx not installed                            | Try `uv tool install` or `pip install --user` instead                                                    |
+| `externally-managed-environment`            | Python 3.11+ system Python forbids global pip | Use `pipx`, `uv tool install`, or the venv fallback                                                      |
+| Permission denied                             | No write access to install location           | Add `--user` flag, or use venv fallback                                                                    |
+| `bdc: command not found` after venv install | venv bin not in PATH                          | Use full path:`.venv/bin/bdc` (macOS/Linux) or `.venv\Scripts\bdc` (Windows)                             |
 
 ## Supported formats
 
-| Input | Output |
-| --- | --- |
-| `.docx` | Markdown |
-| `.xlsx` | Markdown |
-| `.pptx` | Markdown |
-| `.pdf` | Markdown |
-| `.md` | Word `.docx` |
+| Input     | Output         |
+| --------- | -------------- |
+| `.docx` | Markdown       |
+| `.xlsx` | Markdown       |
+| `.pptx` | Markdown       |
+| `.pdf`  | Markdown       |
+| `.md`   | Word `.docx` |
