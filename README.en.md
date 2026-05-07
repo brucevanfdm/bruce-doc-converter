@@ -170,7 +170,7 @@ Scanned PDFs require OCR first. Protected PDFs must be unlocked before conversio
 
 ```
 bruce-doc-converter/
-├── skills/
+├── bruce-doc-converter-skill/
 │   └── SKILL.md                  # Agent Skill definition
 ├── pyproject.toml                # Python package metadata
 ├── requirements.txt              # Local development dependencies
