@@ -34,7 +34,9 @@ pipx install bruce-doc-converter
 uv tool install bruce-doc-converter
 
 # 3. pip --user (most universally available, bdc lands in PATH)
-pip install --user bruce-doc-converter   # or: python3 -m pip install --user bruce-doc-converter
+pip3 install --user bruce-doc-converter  # macOS/Linux
+pip install --user bruce-doc-converter   # Windows
+# or universally: python3 -m pip install --user bruce-doc-converter (use `python` on Windows)
 
 # 4. venv fallback (works everywhere, but bdc will NOT be in PATH)
 python3 -m venv .venv
