@@ -13,16 +13,36 @@
 
 ## 安装
 
+首先检查 `bdc` 是否已安装：
+
 ```bash
-pipx install bruce-doc-converter
+command -v bdc        # macOS / Linux
+where bdc             # Windows
 ```
 
-如果 `pipx` 不可用，建议使用虚拟环境：
+若未安装，依次尝试以下方式（成功即止）：
 
 ```bash
+# 1. pipx（首选，独立环境，bdc 直接可用）
+pipx install bruce-doc-converter
+
+# 2. uv（快速、独立，bdc 直接可用）
+uv tool install bruce-doc-converter
+
+# 3. pip --user（最通用，bdc 直接可用）
+pip3 install --user bruce-doc-converter   # macOS/Linux
+pip install --user bruce-doc-converter    # Windows
+# 或通用写法：python3 -m pip install --user bruce-doc-converter（Windows 用 `python`）
+
+# 4. venv 兜底（处处可用，但 bdc 不在 PATH 中）
 python3 -m venv .venv
 .venv/bin/pip install bruce-doc-converter
+# Windows: .venv\Scripts\pip install bruce-doc-converter
 ```
+
+> **venv 提示**：使用 venv 方式安装后，下文所有 `bdc` 命令需替换为 `.venv/bin/bdc`（macOS/Linux）或 `.venv\Scripts\bdc`（Windows）。
+>
+> **Windows 提示**：若 `python3` 未识别，改用 `python`。
 
 ## Agent CLI 用法
 
@@ -141,6 +161,16 @@ bdc --help-json
 - **Node.js 14+**（可选，仅 Markdown → Word 需要）
 
 ## 常见问题
+
+### 安装故障排查
+
+| 错误 | 原因 | 解决方案 |
+| --- | --- | --- |
+| `SOCKS support` / 代理连接错误 | `all_proxy` 或 `http_proxy` 环境变量已设置 | 运行 `unset all_proxy http_proxy https_proxy`（macOS/Linux）或 `set all_proxy=`（Windows CMD），然后重试 |
+| `command not found: pipx` | 未安装 pipx | 改用 `uv tool install` 或 `pip install --user` |
+| `externally-managed-environment` | Python 3.11+ 系统 Python 禁止全局 pip 安装 | 使用 `pipx`、`uv tool install` 或 venv 兜底 |
+| Permission denied | 无安装目录写权限 | 添加 `--user` 标志，或使用 venv 兜底 |
+| 安装 venv 后 `bdc: command not found` | venv bin 未加入 PATH | 使用完整路径：`.venv/bin/bdc`（macOS/Linux）或 `.venv\Scripts\bdc`（Windows） |
 
 ### 文件过大怎么办？
 

@@ -13,16 +13,36 @@
 
 ## Installation
 
+First, check if `bdc` is already available:
+
 ```bash
-pipx install bruce-doc-converter
+command -v bdc        # macOS / Linux
+where bdc             # Windows
 ```
 
-If `pipx` is not available, use a virtual environment:
+If not installed, try the following in order — stop at the first that succeeds:
 
 ```bash
+# 1. pipx (preferred — isolated, bdc lands in PATH)
+pipx install bruce-doc-converter
+
+# 2. uv (if available — fast, isolated, bdc lands in PATH)
+uv tool install bruce-doc-converter
+
+# 3. pip --user (most universally available, bdc lands in PATH)
+pip3 install --user bruce-doc-converter  # macOS/Linux
+pip install --user bruce-doc-converter   # Windows
+# or universally: python3 -m pip install --user bruce-doc-converter (use `python` on Windows)
+
+# 4. venv fallback (works everywhere, but bdc will NOT be in PATH)
 python3 -m venv .venv
 .venv/bin/pip install bruce-doc-converter
+# Windows: .venv\Scripts\pip install bruce-doc-converter
 ```
+
+> **venv note:** If you used the venv fallback, replace every `bdc` command below with `.venv/bin/bdc` (macOS/Linux) or `.venv\Scripts\bdc` (Windows).
+
+> **Windows note:** Use `python` instead of `python3` if the former is not recognized.
 
 ## Agent CLI Usage
 
@@ -141,6 +161,16 @@ For batch conversion, `success` means every file converted successfully. If only
 - **Node.js 14+** (optional, only needed for Markdown → Word)
 
 ## FAQ
+
+### Installation troubleshooting
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `SOCKS support` / proxy connection error | `all_proxy` or `http_proxy` env vars set | Run `unset all_proxy http_proxy https_proxy` (macOS/Linux) or `set all_proxy=` (Windows CMD), then retry |
+| `command not found: pipx` | pipx not installed | Try `uv tool install` or `pip install --user` instead |
+| `externally-managed-environment` | Python 3.11+ system Python forbids global pip | Use `pipx`, `uv tool install`, or the venv fallback |
+| Permission denied | No write access to install location | Add `--user` flag, or use venv fallback |
+| `bdc: command not found` after venv install | venv bin not in PATH | Use full path: `.venv/bin/bdc` (macOS/Linux) or `.venv\Scripts\bdc` (Windows) |
 
 ### File too large?
 
