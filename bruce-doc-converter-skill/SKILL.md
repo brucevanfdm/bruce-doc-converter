@@ -15,16 +15,24 @@ Use this skill when the user asks to:
 - Export Markdown as Word.
 - Process uploaded document files whose content the agent cannot directly read.
 
-## Installation
+## Setup and version check
 
-First, check if `bdc` is already available:
+Run this first — it checks installation status and current version in one step:
 
 ```bash
-command -v bdc        # macOS / Linux
-where bdc             # Windows
+bdc --help-json
 ```
 
-If not installed, try the following in order — stop at the first that succeeds:
+- **Command not found** → not installed. Install using one of the methods below, then re-run.
+- **Returns JSON with `cli_version`** → installed. Compare against the latest on PyPI:
+  ```bash
+  pip index versions bruce-doc-converter 2>/dev/null | head -1
+  ```
+  If the versions differ, upgrade (see Upgrade section), then re-run `bdc setup-node` if Markdown to Word was previously set up.
+
+### Install (if not already installed)
+
+Try the following in order — stop at the first that succeeds:
 
 ```bash
 # 1. pipx (preferred — isolated, bdc lands in PATH)

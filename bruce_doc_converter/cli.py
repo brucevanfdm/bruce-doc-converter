@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+from importlib.metadata import version as _pkg_version, PackageNotFoundError as _PkgNotFoundError
 
 from bruce_doc_converter.converter import (
     SUPPORTED_EXTENSIONS,
@@ -139,9 +140,14 @@ def _normalize_single_result(input_path, result):
 
 
 def _help_payload():
+    try:
+        cli_version = _pkg_version("bruce-doc-converter")
+    except _PkgNotFoundError:
+        cli_version = "unknown"
     return {
         "schema_version": SCHEMA_VERSION,
         "success": True,
+        "cli_version": cli_version,
         "commands": {
             "convert": "Convert one .docx/.xlsx/.pptx/.pdf file to Markdown, or one .md file to DOCX.",
             "batch": "Convert supported files in a directory.",
