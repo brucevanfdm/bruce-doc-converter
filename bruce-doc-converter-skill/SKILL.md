@@ -1,6 +1,6 @@
 ---
 name: bruce-doc-converter
-description: 双向文档转换工具，将 Word (.docx)、Excel (.xlsx)、PowerPoint (.pptx) 和 PDF (.pdf) 转换为 AI 友好的 Markdown，或将 Markdown (.md) 转换为 Word (.docx)。当用户请求文档转换、导出、读取、分析 Office/PDF/Markdown 文件，或上传这些格式并询问内容时使用。
+description: 双向文档转换工具，将 Word (.docx)、Excel (.xlsx)、PowerPoint (.pptx) 和 PDF (.pdf) 转换为 AI 友好的 Markdown，或将 Markdown (.md) 转换为 Word (.docx)（支持 Mermaid 图表自动渲染为 PNG）。当用户请求文档转换、导出、读取、分析 Office/PDF/Markdown 文件，或上传这些格式并询问内容时使用。
 ---
 # Bruce Doc Converter
 
@@ -68,6 +68,14 @@ For Markdown to Word, initialize the Node.js dependencies explicitly before firs
 bdc setup-node
 ```
 
+If the Markdown contains **Mermaid diagrams** (` ```mermaid ` blocks), they will be automatically rendered as PNG images embedded in the Word document. This requires Puppeteer to have a Chrome/Chromium browser available. If Mermaid rendering silently falls back to plain code blocks, run setup with scripts allowed so Puppeteer can download its browser:
+
+```bash
+bdc setup-node --allow-scripts
+```
+
+> **Linux note:** Mermaid rendering is disabled by default on Linux sandboxed environments. Set `BRUCE_DOC_CONVERTER_ALLOW_CHROMIUM_NO_SANDBOX=1` if your environment requires it and you understand the risk.
+
 The CLI prints JSON to stdout by default. Progress logs may appear on stderr.
 
 ## Output handling
@@ -88,6 +96,20 @@ On failure:
 - Do not pre-check Python dependencies. Run the command first and react to JSON failure.
 - If Markdown to Word returns `DEPENDENCY_INSTALL_REQUIRED`, run `next_command` when present, otherwise run `bdc setup-node`, then retry.
 - `bdc setup-node` is idempotent and may return `already_installed: true` with `install_action: "skipped"`.
+
+## Upgrade
+
+To upgrade to the latest version, use the same tool you used to install:
+
+```bash
+pipx upgrade bruce-doc-converter          # if installed via pipx
+uv tool upgrade bruce-doc-converter       # if installed via uv
+pip install --user --upgrade bruce-doc-converter   # if installed via pip --user
+.venv/bin/pip install --upgrade bruce-doc-converter  # if installed in a venv (macOS/Linux)
+.venv\Scripts\pip install --upgrade bruce-doc-converter  # venv on Windows
+```
+
+After upgrading, re-run `bdc setup-node` if you use Markdown to Word conversion, as Node.js dependencies may also have been updated.
 
 ## Troubleshooting installation
 

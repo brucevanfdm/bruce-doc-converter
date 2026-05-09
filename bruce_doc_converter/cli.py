@@ -162,13 +162,13 @@ def _build_parser():
     convert_parser = subparsers.add_parser("convert", add_help=False)
     convert_parser.add_argument("file")
     convert_parser.add_argument("--output-dir")
-    convert_parser.add_argument("--extract-images", choices=["true", "false"], default="true")
+    convert_parser.add_argument("--extract-images", choices=["true", "false"], default="false")
 
     batch_parser = subparsers.add_parser("batch", add_help=False)
     batch_parser.add_argument("directory")
     batch_parser.add_argument("--output-dir")
     batch_parser.add_argument("--recursive", choices=["true", "false"], default="true")
-    batch_parser.add_argument("--extract-images", choices=["true", "false"], default="true")
+    batch_parser.add_argument("--extract-images", choices=["true", "false"], default="false")
 
     setup_node_parser = subparsers.add_parser("setup-node", add_help=False)
     setup_node_parser.add_argument("--allow-scripts", action="store_true")
