@@ -93,6 +93,39 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["success"])
         self.assertEqual("/tmp/node", payload["node_home"])
 
+    def test_convert_passes_default_mermaid_scale(self):
+        with patch(
+            "bruce_doc_converter.cli.convert_document",
+            return_value={"success": True, "output_path": "/tmp/out.docx", "message": "ok"},
+        ) as convert:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli.main(["convert", "/tmp/input.md"])
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(4.0, convert.call_args.kwargs["mermaid_scale"])
+
+    def test_convert_passes_custom_mermaid_scale(self):
+        with patch(
+            "bruce_doc_converter.cli.convert_document",
+            return_value={"success": True, "output_path": "/tmp/out.docx", "message": "ok"},
+        ) as convert:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli.main(["convert", "/tmp/input.md", "--mermaid-scale", "5"])
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(5.0, convert.call_args.kwargs["mermaid_scale"])
+
+    def test_batch_passes_custom_mermaid_scale(self):
+        with patch("bruce_doc_converter.cli.batch_convert", return_value=[]) as batch:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli.main(["batch", "/tmp/docs", "--mermaid-scale", "3"])
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(3.0, batch.call_args.kwargs["mermaid_scale"])
+
     def test_normalize_result_uses_structured_error_code(self):
         payload = cli._normalize_single_result(
             "/tmp/input.docx",

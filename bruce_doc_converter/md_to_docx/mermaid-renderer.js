@@ -10,7 +10,7 @@ const { spawn } = require('child_process');
 
 const MMDC_TIMEOUT_MS = Number.parseInt(process.env.BRUCE_DOC_CONVERTER_MMDC_TIMEOUT_MS || '90000', 10);
 const MMDC_FORMAT = (process.env.BRUCE_DOC_CONVERTER_MMDC_FORMAT || 'png').toLowerCase();
-const MMDC_SCALE = Number.parseFloat(process.env.BRUCE_DOC_CONVERTER_MMDC_SCALE || '2');
+const MMDC_SCALE = Number.parseFloat(process.env.BRUCE_DOC_CONVERTER_MMDC_SCALE || '4');
 const TEMP_DIR_PREFIX = 'bruce-doc-converter-mmdc-';
 
 const MERMAID_CONFIG = {
@@ -59,7 +59,7 @@ async function renderMermaidToDataUrl(mermaidCode) {
       '-c', configPath,
       '-p', puppeteerConfigPath,
       '-b', 'transparent',
-      '-s', Number.isFinite(MMDC_SCALE) && MMDC_SCALE > 0 ? String(MMDC_SCALE) : '2',
+      '-s', Number.isFinite(MMDC_SCALE) && MMDC_SCALE > 0 ? String(MMDC_SCALE) : '4',
       '-q'
     ];
 

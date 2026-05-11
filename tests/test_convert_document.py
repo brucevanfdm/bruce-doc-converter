@@ -1,4 +1,5 @@
 import base64
+import json
 import shutil
 import tempfile
 import unittest
@@ -498,7 +499,7 @@ class ConvertDocumentTests(unittest.TestCase):
             md_path.write_text("# title", encoding="utf-8")
 
             def _exists(path):
-                return str(path).endswith("md_to_docx/index.js")
+                return Path(str(path)).as_posix().endswith("md_to_docx/index.js")
 
             with patch("bruce_doc_converter.converter.shutil.which", return_value="/usr/bin/node"):
                 with patch("bruce_doc_converter.converter.os.path.exists", side_effect=_exists):
@@ -509,6 +510,40 @@ class ConvertDocumentTests(unittest.TestCase):
         self.assertEqual("DEPENDENCY_INSTALL_REQUIRED", result["error_code"])
         ensure.assert_not_called()
 
+    def test_convert_md_sets_mermaid_scale_env(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            md_path = Path(tmp_dir) / "input.md"
+            md_path.write_text("# title", encoding="utf-8")
+
+            completed = type("Completed", (), {
+                "stdout": json.dumps({"success": True, "output_path": str(Path(tmp_dir) / "out.docx")}),
+                "stderr": "",
+                "returncode": 0,
+            })()
+
+            with patch("bruce_doc_converter.converter.shutil.which", return_value="/usr/bin/node"):
+                with patch("bruce_doc_converter.converter.os.path.exists", return_value=True):
+                    with patch("bruce_doc_converter.converter._find_mmdc_binary", return_value="/tmp/mmdc"):
+                        with patch(
+                            "bruce_doc_converter.converter.subprocess.run",
+                            return_value=completed,
+                        ) as run:
+                            result = convert_md(str(md_path), output_dir=tmp_dir, mermaid_scale=3.5)
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual("3.5", run.call_args.kwargs["env"]["BRUCE_DOC_CONVERTER_MMDC_SCALE"])
+
+    def test_convert_document_rejects_invalid_mermaid_scale(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            md_path = Path(tmp_dir) / "input.md"
+            md_path.write_text("# title", encoding="utf-8")
+
+            result = convert_document(str(md_path), mermaid_scale=0)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("USAGE_ERROR", result["error_code"])
+        self.assertIn("Mermaid scale", result["error"])
+
     def test_setup_node_skips_install_when_shared_dependencies_are_ready(self):
         source_dir = Path(__file__).resolve().parents[1] / "bruce_doc_converter" / "md_to_docx"
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -518,18 +553,91 @@ class ConvertDocumentTests(unittest.TestCase):
             shutil.copy2(source_dir / "package.json", shared_dir / "package.json")
             shutil.copy2(source_dir / "package-lock.json", shared_dir / "package-lock.json")
             (bin_dir / "mmdc").write_text("#!/bin/sh\n", encoding="utf-8")
+            (bin_dir / "mmdc.cmd").write_text("@echo off\n", encoding="utf-8")
             (shared_dir / "node_modules" / "docx").mkdir()
             (shared_dir / "node_modules" / "jsdom").mkdir()
             (shared_dir / "node_modules" / "@mermaid-js" / "mermaid-cli").mkdir(parents=True)
 
             with patch("bruce_doc_converter.converter._get_node_shared_root", return_value=tmp_dir):
                 with patch("bruce_doc_converter.converter._ensure_shared_node_modules") as ensure:
-                    result = setup_node_dependencies()
+                    with patch(
+                        "bruce_doc_converter.converter._ensure_puppeteer_browser",
+                        return_value=(True, None),
+                    ) as ensure_browser:
+                        result = setup_node_dependencies()
 
         self.assertTrue(result["success"], result)
         self.assertTrue(result["already_installed"])
         self.assertEqual("skipped", result["install_action"])
+        self.assertEqual("installed_or_verified", result["browser_install_action"])
         ensure.assert_not_called()
+        ensure_browser.assert_called_once_with(str(shared_dir))
+
+    def test_setup_node_allow_scripts_installs_browser_when_dependencies_are_ready(self):
+        source_dir = Path(__file__).resolve().parents[1] / "bruce_doc_converter" / "md_to_docx"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_dir = Path(tmp_dir) / "md_to_docx"
+            bin_dir = shared_dir / "node_modules" / ".bin"
+            bin_dir.mkdir(parents=True)
+            shutil.copy2(source_dir / "package.json", shared_dir / "package.json")
+            shutil.copy2(source_dir / "package-lock.json", shared_dir / "package-lock.json")
+            (bin_dir / "mmdc").write_text("#!/bin/sh\n", encoding="utf-8")
+            (bin_dir / "mmdc.cmd").write_text("@echo off\n", encoding="utf-8")
+            (shared_dir / "node_modules" / "docx").mkdir()
+            (shared_dir / "node_modules" / "jsdom").mkdir()
+            (shared_dir / "node_modules" / "@mermaid-js" / "mermaid-cli").mkdir(parents=True)
+
+            with patch("bruce_doc_converter.converter._get_node_shared_root", return_value=tmp_dir):
+                with patch("bruce_doc_converter.converter._ensure_shared_node_modules") as ensure:
+                    with patch(
+                        "bruce_doc_converter.converter._ensure_puppeteer_browser",
+                        return_value=(True, None),
+                    ) as ensure_browser:
+                        result = setup_node_dependencies(allow_scripts=True)
+
+        self.assertTrue(result["success"], result)
+        self.assertTrue(result["already_installed"])
+        self.assertEqual("skipped", result["install_action"])
+        self.assertEqual("installed_or_verified", result["browser_install_action"])
+        ensure.assert_not_called()
+        ensure_browser.assert_called_once_with(str(shared_dir))
+
+    def test_setup_node_installs_browser_after_node_dependencies(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_dir = Path(tmp_dir) / "md_to_docx"
+
+            with patch("bruce_doc_converter.converter._get_node_shared_root", return_value=tmp_dir):
+                with patch("bruce_doc_converter.converter._shared_node_dependencies_ready", return_value=False):
+                    with patch(
+                        "bruce_doc_converter.converter._ensure_shared_node_modules",
+                        return_value=(True, None),
+                    ) as ensure:
+                        with patch(
+                            "bruce_doc_converter.converter._ensure_puppeteer_browser",
+                            return_value=(True, None),
+                        ) as ensure_browser:
+                            result = setup_node_dependencies()
+
+        self.assertTrue(result["success"], result)
+        self.assertFalse(result["already_installed"])
+        self.assertEqual("installed", result["install_action"])
+        self.assertEqual("installed_or_verified", result["browser_install_action"])
+        ensure.assert_called_once()
+        ensure_browser.assert_called_once_with(str(shared_dir))
+
+    def test_setup_node_reports_browser_install_failure(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("bruce_doc_converter.converter._get_node_shared_root", return_value=tmp_dir):
+                with patch("bruce_doc_converter.converter._shared_node_dependencies_ready", return_value=True):
+                    with patch(
+                        "bruce_doc_converter.converter._ensure_puppeteer_browser",
+                        return_value=(False, "Chromium 浏览器安装失败: network"),
+                    ):
+                        result = setup_node_dependencies(allow_scripts=True)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPENDENCY_INSTALL_FAILED", result["error_code"])
+        self.assertIn("Chromium 浏览器安装失败", result["error"])
 
     def test_batch_convert_skips_generated_output_directories(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

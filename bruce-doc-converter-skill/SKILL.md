@@ -64,10 +64,17 @@ Run:
 bdc convert "<file>"
 ```
 
+For Markdown files with Mermaid diagrams, PNG rendering defaults to scale `4`. Increase or decrease it when needed:
+
+```bash
+bdc convert "<file.md>" --mermaid-scale 5
+```
+
 For batch conversion:
 
 ```bash
 bdc batch "<directory>"
+bdc batch "<directory>" --mermaid-scale 5
 ```
 
 For Markdown to Word, initialize the Node.js dependencies explicitly before first use:
@@ -76,7 +83,9 @@ For Markdown to Word, initialize the Node.js dependencies explicitly before firs
 bdc setup-node
 ```
 
-If the Markdown contains **Mermaid diagrams** (` ```mermaid ` blocks), they will be automatically rendered as PNG images embedded in the Word document. This requires Puppeteer to have a Chrome/Chromium browser available. If Mermaid rendering silently falls back to plain code blocks, run setup with scripts allowed so Puppeteer can download its browser:
+If the Markdown contains **Mermaid diagrams** (` ```mermaid ` blocks), they will be automatically rendered as PNG images embedded in the Word document. `bdc setup-node` also installs or verifies Puppeteer's `chrome-headless-shell` browser, so rerun it after upgrading the CLI or when Mermaid unexpectedly appears as plain code blocks.
+
+If your environment specifically requires npm lifecycle scripts, run:
 
 ```bash
 bdc setup-node --allow-scripts

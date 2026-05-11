@@ -169,12 +169,14 @@ def _build_parser():
     convert_parser.add_argument("file")
     convert_parser.add_argument("--output-dir")
     convert_parser.add_argument("--extract-images", choices=["true", "false"], default="false")
+    convert_parser.add_argument("--mermaid-scale", type=float, default=4.0)
 
     batch_parser = subparsers.add_parser("batch", add_help=False)
     batch_parser.add_argument("directory")
     batch_parser.add_argument("--output-dir")
     batch_parser.add_argument("--recursive", choices=["true", "false"], default="true")
     batch_parser.add_argument("--extract-images", choices=["true", "false"], default="false")
+    batch_parser.add_argument("--mermaid-scale", type=float, default=4.0)
 
     setup_node_parser = subparsers.add_parser("setup-node", add_help=False)
     setup_node_parser.add_argument("--allow-scripts", action="store_true")
@@ -198,6 +200,7 @@ def main(argv=None):
             namespace.file,
             extract_images=namespace.extract_images == "true",
             output_dir=output_dir,
+            mermaid_scale=namespace.mermaid_scale,
         )
         payload = _normalize_single_result(namespace.file, result)
         return _emit(payload, 0 if payload["success"] else 1)
@@ -209,6 +212,7 @@ def main(argv=None):
             recursive=namespace.recursive == "true",
             extract_images=namespace.extract_images == "true",
             output_dir=output_dir,
+            mermaid_scale=namespace.mermaid_scale,
         )
         results = []
         for item in raw_results:

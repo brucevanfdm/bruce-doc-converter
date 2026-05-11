@@ -219,6 +219,42 @@ def _ensure_shared_node_modules(shared_dir, source_dir, allow_scripts=False):
 
     return True, None
 
+def _ensure_puppeteer_browser(shared_dir):
+    npm_cmd = shutil.which('npm')
+    if not npm_cmd:
+        return False, "未找到 npm。请安装 Node.js（自带 npm）后重试。"
+
+    cmd = [
+        npm_cmd,
+        "exec",
+        "puppeteer",
+        "--",
+        "browsers",
+        "install",
+        "chrome-headless-shell",
+    ]
+    try:
+        print("[BruceDocConverter] 正在安装 Mermaid 渲染所需的 Chromium 浏览器...", file=sys.stderr)
+        result = subprocess.run(
+            cmd,
+            cwd=shared_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=NODE_INSTALL_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            error_output = result.stderr.strip() or result.stdout.strip()
+            return False, f"Chromium 浏览器安装失败: {error_output}"
+    except subprocess.TimeoutExpired:
+        return False, f"Chromium 浏览器安装超时（超过{NODE_INSTALL_TIMEOUT_SECONDS}秒）"
+    except Exception as e:
+        return False, f"Chromium 浏览器安装失败: {str(e)}"
+
+    return True, None
+
 def _find_mmdc_binary(node_modules_dir):
     if not node_modules_dir:
         return None
@@ -2533,13 +2569,30 @@ def convert_pdf(file_path):
         raise ValueError(f"PDF 解析失败，无法提取任何内容。异常页码: {page_numbers}")
     return _postprocess_pdf_academic_sections(content)
 
-def convert_md(file_path, output_dir=None):
+def _normalize_mermaid_scale(mermaid_scale):
+    if mermaid_scale is None:
+        return None
+    try:
+        scale = float(mermaid_scale)
+    except (TypeError, ValueError):
+        raise ValueError("Mermaid scale 必须是正数")
+    if not scale > 0:
+        raise ValueError("Mermaid scale 必须大于 0")
+    return scale
+
+def _format_mermaid_scale(scale):
+    if float(scale).is_integer():
+        return str(int(scale))
+    return str(scale)
+
+def convert_md(file_path, output_dir=None, mermaid_scale=None):
     """
     将 Markdown 文件转换为 DOCX 格式（通过 Node.js 脚本）
 
     Args:
         file_path: Markdown 文件路径
         output_dir: 可选的输出目录
+        mermaid_scale: Mermaid PNG 渲染倍率，默认由 Node 渲染器决定
 
     Returns:
         包含 'success'、'output_path' 和可选 'error' 的字典
@@ -2602,6 +2655,9 @@ def convert_md(file_path, output_dir=None):
         mmdc_binary = local_mmdc or shared_mmdc
         if mmdc_binary:
             env["BRUCE_DOC_CONVERTER_MMDC_PATH"] = mmdc_binary
+        normalized_scale = _normalize_mermaid_scale(mermaid_scale)
+        if normalized_scale is not None:
+            env["BRUCE_DOC_CONVERTER_MMDC_SCALE"] = _format_mermaid_scale(normalized_scale)
 
         result = subprocess.run(
             cmd,
@@ -2647,15 +2703,22 @@ def setup_node_dependencies(allow_scripts=False):
     shared_root = _get_node_shared_root()
     shared_dir = os.path.join(shared_root, 'md_to_docx')
     if _shared_node_dependencies_ready(shared_dir, source_dir):
+        ok, err = _ensure_puppeteer_browser(shared_dir)
+        if not ok:
+            return _error_result('DEPENDENCY_INSTALL_FAILED', err)
         return {
             'success': True,
             'node_home': shared_dir,
             'allow_scripts': bool(allow_scripts),
             'already_installed': True,
             'install_action': 'skipped',
+            'browser_install_action': 'installed_or_verified',
         }
 
     ok, err = _ensure_shared_node_modules(shared_dir, source_dir, allow_scripts=allow_scripts)
+    if not ok:
+        return _error_result('DEPENDENCY_INSTALL_FAILED', err)
+    ok, err = _ensure_puppeteer_browser(shared_dir)
     if not ok:
         return _error_result('DEPENDENCY_INSTALL_FAILED', err)
     return {
@@ -2664,9 +2727,10 @@ def setup_node_dependencies(allow_scripts=False):
         'allow_scripts': bool(allow_scripts),
         'already_installed': False,
         'install_action': 'installed',
+        'browser_install_action': 'installed_or_verified',
     }
 
-def convert_document(file_path, extract_images=True, output_dir=None):
+def convert_document(file_path, extract_images=True, output_dir=None, mermaid_scale=None):
     """
     将文档转换为 Markdown 格式
 
@@ -2674,6 +2738,7 @@ def convert_document(file_path, extract_images=True, output_dir=None):
         file_path: 文档文件路径
         extract_images: 是否提取图片（默认 True，支持 Word/Excel/PowerPoint）
         output_dir: 可选的输出目录（默认为同目录下的 Markdown/ 子目录）
+        mermaid_scale: Markdown 转 Word 时 Mermaid PNG 渲染倍率
 
     Returns:
         包含 'success'、'markdown_content'、'output_path'、可选 'extracted_images' 和 'error' 的字典
@@ -2704,7 +2769,11 @@ def convert_document(file_path, extract_images=True, output_dir=None):
 
     # Markdown 转 DOCX 使用单独的处理流程
     if file_ext == '.md':
-        return convert_md(file_path, output_dir)
+        try:
+            _normalize_mermaid_scale(mermaid_scale)
+        except ValueError as e:
+            return _error_result('USAGE_ERROR', str(e))
+        return convert_md(file_path, output_dir, mermaid_scale=mermaid_scale)
 
     # 检查依赖（按格式按需检查，避免无关依赖阻塞）
     deps_ok, error_msg = check_dependencies(file_ext)
@@ -2775,7 +2844,7 @@ def convert_document(file_path, extract_images=True, output_dir=None):
     except Exception as e:
         return _error_result('CONVERSION_ERROR', f'转换错误 ({type(e).__name__}): {str(e)}')
 
-def batch_convert(directory, recursive=True, extract_images=True, output_dir=None):
+def batch_convert(directory, recursive=True, extract_images=True, output_dir=None, mermaid_scale=None):
     """
     批量转换目录中的所有支持的文档
 
@@ -2784,6 +2853,7 @@ def batch_convert(directory, recursive=True, extract_images=True, output_dir=Non
         recursive: 是否递归扫描子目录
         extract_images: 是否提取图片
         output_dir: 可选的输出目录
+        mermaid_scale: Markdown 转 Word时 Mermaid PNG 渲染倍率
 
     Returns:
         转换结果列表
@@ -2813,7 +2883,12 @@ def batch_convert(directory, recursive=True, extract_images=True, output_dir=Non
             if relative_parent != '.':
                 file_output_dir = os.path.join(normalized_output_dir, relative_parent)
 
-        result = convert_document(file_path, extract_images, file_output_dir)
+        result = convert_document(
+            file_path,
+            extract_images=extract_images,
+            output_dir=file_output_dir,
+            mermaid_scale=mermaid_scale,
+        )
         results.append({
             'file': file_path,
             'result': result
