@@ -532,6 +532,34 @@ class ConvertDocumentTests(unittest.TestCase):
 
         self.assertTrue(result["success"], result)
         self.assertEqual("3.5", run.call_args.kwargs["env"]["BRUCE_DOC_CONVERTER_MMDC_SCALE"])
+        self.assertNotIn("BRUCE_DOC_CONVERTER_CHROME_PATH", run.call_args.kwargs["env"])
+
+    def test_convert_md_sets_local_browser_env_only_for_mermaid(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            md_path = Path(tmp_dir) / "input.md"
+            md_path.write_text("```mermaid\nflowchart TD\n  A --> B\n```\n", encoding="utf-8")
+
+            completed = type("Completed", (), {
+                "stdout": json.dumps({"success": True, "output_path": str(Path(tmp_dir) / "out.docx")}),
+                "stderr": "",
+                "returncode": 0,
+            })()
+
+            with patch("bruce_doc_converter.converter.shutil.which", return_value="/usr/bin/node"):
+                with patch("bruce_doc_converter.converter.os.path.exists", return_value=True):
+                    with patch("bruce_doc_converter.converter._find_mmdc_binary", return_value="/tmp/mmdc"):
+                        with patch("bruce_doc_converter.converter._find_local_browser", return_value="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"):
+                            with patch(
+                                "bruce_doc_converter.converter.subprocess.run",
+                                return_value=completed,
+                            ) as run:
+                                result = convert_md(str(md_path), output_dir=tmp_dir)
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            run.call_args.kwargs["env"]["BRUCE_DOC_CONVERTER_CHROME_PATH"],
+        )
 
     def test_convert_document_rejects_invalid_mermaid_scale(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -569,11 +597,11 @@ class ConvertDocumentTests(unittest.TestCase):
         self.assertTrue(result["success"], result)
         self.assertTrue(result["already_installed"])
         self.assertEqual("skipped", result["install_action"])
-        self.assertEqual("installed_or_verified", result["browser_install_action"])
+        self.assertEqual("not_requested", result["browser_install_action"])
         ensure.assert_not_called()
-        ensure_browser.assert_called_once_with(str(shared_dir))
+        ensure_browser.assert_not_called()
 
-    def test_setup_node_allow_scripts_installs_browser_when_dependencies_are_ready(self):
+    def test_setup_node_install_browser_when_dependencies_are_ready(self):
         source_dir = Path(__file__).resolve().parents[1] / "bruce_doc_converter" / "md_to_docx"
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_dir = Path(tmp_dir) / "md_to_docx"
@@ -593,7 +621,7 @@ class ConvertDocumentTests(unittest.TestCase):
                         "bruce_doc_converter.converter._ensure_puppeteer_browser",
                         return_value=(True, None),
                     ) as ensure_browser:
-                        result = setup_node_dependencies(allow_scripts=True)
+                        result = setup_node_dependencies(install_browser=True)
 
         self.assertTrue(result["success"], result)
         self.assertTrue(result["already_installed"])
@@ -602,7 +630,7 @@ class ConvertDocumentTests(unittest.TestCase):
         ensure.assert_not_called()
         ensure_browser.assert_called_once_with(str(shared_dir))
 
-    def test_setup_node_installs_browser_after_node_dependencies(self):
+    def test_setup_node_does_not_install_browser_after_node_dependencies_by_default(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             shared_dir = Path(tmp_dir) / "md_to_docx"
 
@@ -621,6 +649,29 @@ class ConvertDocumentTests(unittest.TestCase):
         self.assertTrue(result["success"], result)
         self.assertFalse(result["already_installed"])
         self.assertEqual("installed", result["install_action"])
+        self.assertEqual("not_requested", result["browser_install_action"])
+        ensure.assert_called_once()
+        ensure_browser.assert_not_called()
+
+    def test_setup_node_install_browser_after_node_dependencies_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_dir = Path(tmp_dir) / "md_to_docx"
+
+            with patch("bruce_doc_converter.converter._get_node_shared_root", return_value=tmp_dir):
+                with patch("bruce_doc_converter.converter._shared_node_dependencies_ready", return_value=False):
+                    with patch(
+                        "bruce_doc_converter.converter._ensure_shared_node_modules",
+                        return_value=(True, None),
+                    ) as ensure:
+                        with patch(
+                            "bruce_doc_converter.converter._ensure_puppeteer_browser",
+                            return_value=(True, None),
+                        ) as ensure_browser:
+                            result = setup_node_dependencies(install_browser=True)
+
+        self.assertTrue(result["success"], result)
+        self.assertFalse(result["already_installed"])
+        self.assertEqual("installed", result["install_action"])
         self.assertEqual("installed_or_verified", result["browser_install_action"])
         ensure.assert_called_once()
         ensure_browser.assert_called_once_with(str(shared_dir))
@@ -633,7 +684,7 @@ class ConvertDocumentTests(unittest.TestCase):
                         "bruce_doc_converter.converter._ensure_puppeteer_browser",
                         return_value=(False, "Chromium 浏览器安装失败: network"),
                     ):
-                        result = setup_node_dependencies(allow_scripts=True)
+                        result = setup_node_dependencies(install_browser=True)
 
         self.assertFalse(result["success"])
         self.assertEqual("DEPENDENCY_INSTALL_FAILED", result["error_code"])

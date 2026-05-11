@@ -31,6 +31,7 @@ MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024
 NODE_CONVERT_TIMEOUT_SECONDS = 120
 NODE_INSTALL_TIMEOUT_SECONDS = 300
 NODE_SHARED_HOME_ENV = "BRUCE_DOC_CONVERTER_NODE_HOME"
+BROWSER_PATH_ENV = "BRUCE_DOC_CONVERTER_CHROME_PATH"
 GENERATED_OUTPUT_DIR_NAMES = {"Markdown", "Word"}
 DOCX_XML_NAMESPACES = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 DOCX_W_NS = DOCX_XML_NAMESPACES['w']
@@ -166,6 +167,65 @@ def _get_node_shared_root():
         return os.path.join(base, "BruceDocConverter", "node")
 
     return os.path.join(os.path.expanduser("~"), ".bruce-doc-converter", "node")
+
+def _candidate_browser_paths():
+    paths = []
+    override = os.environ.get(BROWSER_PATH_ENV)
+    if override:
+        paths.append(override)
+
+    if sys.platform == "win32":
+        program_files = [
+            os.environ.get("PROGRAMFILES"),
+            os.environ.get("PROGRAMFILES(X86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ]
+        for base in [p for p in program_files if p]:
+            paths.extend([
+                os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
+                os.path.join(base, "Chromium", "Application", "chrome.exe"),
+            ])
+    elif sys.platform == "darwin":
+        home = os.path.expanduser("~")
+        paths.extend([
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            os.path.join(home, "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+            os.path.join(home, "Applications", "Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge"),
+            os.path.join(home, "Applications", "Chromium.app", "Contents", "MacOS", "Chromium"),
+        ])
+
+    for command in ("google-chrome", "chrome", "chromium", "chromium-browser", "msedge", "microsoft-edge"):
+        found = shutil.which(command)
+        if found:
+            paths.append(found)
+
+    return paths
+
+def _find_local_browser():
+    seen = set()
+    for candidate in _candidate_browser_paths():
+        if not candidate:
+            continue
+        normalized = os.path.abspath(os.path.normpath(os.path.expanduser(str(candidate))))
+        key = normalized.lower() if sys.platform == "win32" else normalized
+        if key in seen:
+            continue
+        seen.add(key)
+        if os.path.isfile(normalized):
+            return normalized
+    return None
+
+def _markdown_contains_mermaid(file_path):
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        with open(file_path, "r", encoding="utf-8-sig", errors="replace") as f:
+            content = f.read()
+    return bool(re.search(r"(^|\n)\s*```\s*mermaid\b", content, re.IGNORECASE))
 
 def _sync_shared_package_files(source_dir, target_dir):
     for filename in ("package.json", "package-lock.json"):
@@ -2658,6 +2718,10 @@ def convert_md(file_path, output_dir=None, mermaid_scale=None):
         normalized_scale = _normalize_mermaid_scale(mermaid_scale)
         if normalized_scale is not None:
             env["BRUCE_DOC_CONVERTER_MMDC_SCALE"] = _format_mermaid_scale(normalized_scale)
+        if _markdown_contains_mermaid(file_path):
+            browser_path = _find_local_browser()
+            if browser_path:
+                env[BROWSER_PATH_ENV] = browser_path
 
         result = subprocess.run(
             cmd,
@@ -2697,37 +2761,45 @@ def convert_md(file_path, output_dir=None, mermaid_scale=None):
     except Exception as e:
         return _error_result('NODE_CONVERSION_FAILED', f'调用 Node.js 脚本失败: {str(e)}')
 
-def setup_node_dependencies(allow_scripts=False):
+def setup_node_dependencies(allow_scripts=False, install_browser=False):
     """显式安装 Markdown -> DOCX 所需的 Node.js 依赖到用户共享目录。"""
     source_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'md_to_docx')
     shared_root = _get_node_shared_root()
     shared_dir = os.path.join(shared_root, 'md_to_docx')
     if _shared_node_dependencies_ready(shared_dir, source_dir):
-        ok, err = _ensure_puppeteer_browser(shared_dir)
-        if not ok:
-            return _error_result('DEPENDENCY_INSTALL_FAILED', err)
+        browser_install_action = 'not_requested'
+        if install_browser:
+            ok, err = _ensure_puppeteer_browser(shared_dir)
+            if not ok:
+                return _error_result('DEPENDENCY_INSTALL_FAILED', err)
+            browser_install_action = 'installed_or_verified'
         return {
             'success': True,
             'node_home': shared_dir,
             'allow_scripts': bool(allow_scripts),
             'already_installed': True,
             'install_action': 'skipped',
-            'browser_install_action': 'installed_or_verified',
+            'browser_install_action': browser_install_action,
+            'detected_browser_path': _find_local_browser(),
         }
 
     ok, err = _ensure_shared_node_modules(shared_dir, source_dir, allow_scripts=allow_scripts)
     if not ok:
         return _error_result('DEPENDENCY_INSTALL_FAILED', err)
-    ok, err = _ensure_puppeteer_browser(shared_dir)
-    if not ok:
-        return _error_result('DEPENDENCY_INSTALL_FAILED', err)
+    browser_install_action = 'not_requested'
+    if install_browser:
+        ok, err = _ensure_puppeteer_browser(shared_dir)
+        if not ok:
+            return _error_result('DEPENDENCY_INSTALL_FAILED', err)
+        browser_install_action = 'installed_or_verified'
     return {
         'success': True,
         'node_home': shared_dir,
         'allow_scripts': bool(allow_scripts),
         'already_installed': False,
         'install_action': 'installed',
-        'browser_install_action': 'installed_or_verified',
+        'browser_install_action': browser_install_action,
+        'detected_browser_path': _find_local_browser(),
     }
 
 def convert_document(file_path, extract_images=True, output_dir=None, mermaid_scale=None):

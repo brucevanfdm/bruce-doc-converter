@@ -83,12 +83,18 @@ For Markdown to Word, initialize the Node.js dependencies explicitly before firs
 bdc setup-node
 ```
 
-If the Markdown contains **Mermaid diagrams** (` ```mermaid ` blocks), they will be automatically rendered as PNG images embedded in the Word document. `bdc setup-node` also installs or verifies Puppeteer's `chrome-headless-shell` browser, so rerun it after upgrading the CLI or when Mermaid unexpectedly appears as plain code blocks.
+If the Markdown contains **Mermaid diagrams** (` ```mermaid ` blocks), they will be automatically rendered as PNG images embedded in the Word document. The CLI automatically detects and uses the user's local Chrome / Edge / Chromium during conversion, launching it headlessly with a temporary browser profile, so do not install a bundled browser unless local browser detection fails.
+
+If no local browser is available, explicitly install Puppeteer's dedicated browser:
+
+```bash
+bdc setup-node --install-browser
+```
 
 If your environment specifically requires npm lifecycle scripts, run:
 
 ```bash
-bdc setup-node --allow-scripts
+bdc setup-node --allow-scripts --install-browser
 ```
 
 > **Linux note:** Mermaid rendering is disabled by default on Linux sandboxed environments. Set `BRUCE_DOC_CONVERTER_ALLOW_CHROMIUM_NO_SANDBOX=1` if your environment requires it and you understand the risk.

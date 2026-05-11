@@ -180,6 +180,7 @@ def _build_parser():
 
     setup_node_parser = subparsers.add_parser("setup-node", add_help=False)
     setup_node_parser.add_argument("--allow-scripts", action="store_true")
+    setup_node_parser.add_argument("--install-browser", action="store_true")
     return parser
 
 
@@ -234,7 +235,10 @@ def main(argv=None):
         return _emit(payload, 0 if payload["success"] else 1)
 
     if namespace.command == "setup-node":
-        payload = setup_node_dependencies(allow_scripts=namespace.allow_scripts)
+        payload = setup_node_dependencies(
+            allow_scripts=namespace.allow_scripts,
+            install_browser=namespace.install_browser,
+        )
         payload = {"schema_version": SCHEMA_VERSION, **payload}
         if not payload["success"]:
             payload.setdefault("retryable", False)

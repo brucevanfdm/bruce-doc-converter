@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const { markdownToHTML } = require('../bruce_doc_converter/md_to_docx/markdown-converter');
 const { convertHTMLToDocx } = require('../bruce_doc_converter/md_to_docx/html-converter');
+const { buildPuppeteerConfig } = require('../bruce_doc_converter/md_to_docx/mermaid-renderer');
 
 function collectDocxText(value) {
   if (typeof value === 'string') return value;
@@ -69,6 +70,22 @@ test('fenced code block 保留首个空行，只移除 fence 结尾带来的一�
   const html = await markdownToHTML(markdown);
 
   assert.equal(html, '<pre><code class="language-js">\nconst x = 1;\n</code></pre>');
+});
+
+test('Mermaid Puppeteer 配置使用 headless 临时 profile 并禁用首次启动提示', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bdc-puppeteer-config-'));
+  try {
+    const config = buildPuppeteerConfig(tmpDir);
+
+    assert.equal(config.headless, true);
+    assert.equal(config.userDataDir, path.join(tmpDir, 'browser-profile'));
+    assert.ok(config.args.includes('--no-first-run'));
+    assert.ok(config.args.includes('--no-default-browser-check'));
+    assert.ok(config.args.includes('--disable-extensions'));
+    assert.ok(config.args.includes('--use-mock-keychain'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('HTML 转 DOCX 只允许读取 Markdown 目录内的相对图片', () => {

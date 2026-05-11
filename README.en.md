@@ -61,20 +61,26 @@ Markdown to Word requires Node.js dependencies. Initialize them explicitly befor
 bdc setup-node
 ```
 
-By default this runs `npm ci --ignore-scripts` against the locked dependency set, avoiding third-party npm lifecycle scripts. It then explicitly installs or verifies the `chrome-headless-shell` browser required for Mermaid rendering. In normal environments, the command above is enough for Mermaid code blocks to become embedded PNG images in Word. Mermaid PNG rendering defaults to scale `4`; override it with `--mermaid-scale`:
+By default this runs `npm ci --ignore-scripts` against the locked dependency set, avoiding third-party npm lifecycle scripts; it does not download a browser by default. When Markdown contains Mermaid diagrams, conversion automatically detects and uses local Chrome / Edge / Chromium in headless mode with a temporary browser profile, avoiding visible windows, the user's real profile, and first-run/default-browser prompts. Mermaid PNG rendering defaults to scale `4`; override it with `--mermaid-scale`:
 
 ```bash
 bdc convert /path/to/notes.md --mermaid-scale 5
 bdc batch /path/to/documents --mermaid-scale 5
 ```
 
-If your environment really needs npm lifecycle scripts, use:
+If the target machine has no usable local browser and you want Puppeteer to download its dedicated `chrome-headless-shell`, run this explicitly:
 
 ```bash
-bdc setup-node --allow-scripts
+bdc setup-node --install-browser
 ```
 
-`bdc setup-node` is idempotent: if the shared dependency directory already matches the installed package, it skips reinstalling Node dependencies but still verifies the browser required for Mermaid rendering. Recoverable failures include `retryable` and `next_command` JSON fields; agents should prefer those machine-readable fields for remediation.
+If your environment really needs npm lifecycle scripts, combine both flags:
+
+```bash
+bdc setup-node --allow-scripts --install-browser
+```
+
+`bdc setup-node` is idempotent: if the shared dependency directory already matches the installed package, it skips reinstalling Node dependencies. Recoverable failures include `retryable` and `next_command` JSON fields; agents should prefer those machine-readable fields for remediation.
 
 Get help:
 
@@ -192,7 +198,7 @@ Node.js is required, and the Node.js dependencies must be installed explicitly:
 bdc setup-node
 ```
 
-This command also installs or verifies the Puppeteer browser required for Mermaid rendering. If Mermaid still appears as code blocks in Word, re-run `bdc setup-node` and inspect the JSON error.
+When Markdown contains Mermaid, conversion prefers local Chrome / Edge / Chromium and launches it with a temporary headless profile. Set `BRUCE_DOC_CONVERTER_CHROME_PATH` to force a browser path; if no local browser is available, run `bdc setup-node --install-browser` to download Puppeteer's dedicated browser.
 
 On Linux, Chromium is not launched with `--no-sandbox` by default. If you understand the risk and your environment requires it, set `BRUCE_DOC_CONVERTER_ALLOW_CHROMIUM_NO_SANDBOX=1` before conversion.
 

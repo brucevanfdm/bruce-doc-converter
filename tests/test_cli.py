@@ -93,6 +93,15 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["success"])
         self.assertEqual("/tmp/node", payload["node_home"])
 
+    def test_setup_node_command_passes_install_browser_flag(self):
+        with patch("bruce_doc_converter.cli.setup_node_dependencies", return_value={"success": True, "node_home": "/tmp/node"}) as setup:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli.main(["setup-node", "--install-browser"])
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(setup.call_args.kwargs["install_browser"])
+
     def test_convert_passes_default_mermaid_scale(self):
         with patch(
             "bruce_doc_converter.cli.convert_document",

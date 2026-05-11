@@ -23,7 +23,22 @@ const MERMAID_CONFIG = {
   }
 };
 
-const LINUX_PUPPETEER_ARGS = ['--no-sandbox', '--disable-setuid-sandbox'];
+const COMMON_PUPPETEER_ARGS = [
+  '--no-first-run',
+  '--no-default-browser-check',
+  '--disable-background-networking',
+  '--disable-component-update',
+  '--disable-default-apps',
+  '--disable-extensions',
+  '--disable-popup-blocking',
+  '--disable-sync',
+  '--disable-translate',
+  '--metrics-recording-only',
+  '--mute-audio',
+  '--password-store=basic',
+  '--use-mock-keychain'
+];
+const LINUX_PUPPETEER_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
 
 /**
  * 将 Mermaid 源码渲染为图片 data URL
@@ -50,7 +65,7 @@ async function renderMermaidToDataUrl(mermaidCode) {
 
     await fs.promises.writeFile(inputPath, mermaidCode, 'utf-8');
     await fs.promises.writeFile(configPath, JSON.stringify(MERMAID_CONFIG), 'utf-8');
-    await fs.promises.writeFile(puppeteerConfigPath, JSON.stringify(buildPuppeteerConfig()), 'utf-8');
+    await fs.promises.writeFile(puppeteerConfigPath, JSON.stringify(buildPuppeteerConfig(tempDir)), 'utf-8');
 
     const args = [
       '-i', inputPath,
@@ -178,11 +193,61 @@ function resolveSharedNodeRoot() {
   return path.join(os.homedir(), '.bruce-doc-converter', 'node');
 }
 
-function buildPuppeteerConfig() {
-  if (process.platform === 'linux' && isNoSandboxExplicitlyAllowed()) {
-    return { args: LINUX_PUPPETEER_ARGS };
+function buildPuppeteerConfig(tempDir) {
+  const args = [...COMMON_PUPPETEER_ARGS];
+  const config = {
+    headless: true,
+    args,
+    userDataDir: path.join(tempDir, 'browser-profile')
+  };
+  const executablePath = resolveBrowserExecutablePath();
+  if (executablePath) {
+    config.executablePath = executablePath;
   }
-  return {};
+
+  if (process.platform === 'linux' && isNoSandboxExplicitlyAllowed()) {
+    config.args = [...args, ...LINUX_PUPPETEER_ARGS];
+  }
+  return config;
+}
+
+function resolveBrowserExecutablePath() {
+  const candidates = [];
+  if (process.env.BRUCE_DOC_CONVERTER_CHROME_PATH) {
+    candidates.push(process.env.BRUCE_DOC_CONVERTER_CHROME_PATH);
+  }
+
+  if (process.platform === 'win32') {
+    const roots = [
+      process.env.PROGRAMFILES,
+      process.env['PROGRAMFILES(X86)'],
+      process.env.LOCALAPPDATA
+    ].filter(Boolean);
+    for (const root of roots) {
+      candidates.push(path.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+      candidates.push(path.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+      candidates.push(path.join(root, 'Chromium', 'Application', 'chrome.exe'));
+    }
+  } else if (process.platform === 'darwin') {
+    candidates.push('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
+    candidates.push('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge');
+    candidates.push('/Applications/Chromium.app/Contents/MacOS/Chromium');
+    candidates.push(path.join(os.homedir(), 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'));
+    candidates.push(path.join(os.homedir(), 'Applications', 'Microsoft Edge.app', 'Contents', 'MacOS', 'Microsoft Edge'));
+    candidates.push(path.join(os.homedir(), 'Applications', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'));
+  } else {
+    candidates.push('/usr/bin/google-chrome');
+    candidates.push('/usr/bin/chromium');
+    candidates.push('/usr/bin/chromium-browser');
+    candidates.push('/usr/bin/microsoft-edge');
+  }
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return '';
 }
 
 function isNoSandboxExplicitlyAllowed() {
@@ -289,5 +354,6 @@ function parseSvgViewBoxSize(svgText) {
 }
 
 module.exports = {
-  renderMermaidToDataUrl
+  renderMermaidToDataUrl,
+  buildPuppeteerConfig
 };
